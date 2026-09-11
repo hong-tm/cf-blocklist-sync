@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# secrets — never commit real environment files
+.env
+.env.*
+!.env.example
+
+# legacy env layout (historical)
+env/
+
+# agent tooling state
+.omo/
+
+# logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
