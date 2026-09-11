@@ -50,7 +50,11 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
  * @typedef {{ok: boolean, added: number, existing: number, error?: string}} GoedgeResult
  */
 
-/** MD5 hex — the panel's LoginAdmin compares against the stored MD5 hash. */
+/**
+ * MD5 hex — the panel's LoginAdmin compares against the stored MD5 hash.
+ * @param {string} s
+ * @returns {string}
+ */
 export function md5hex(s) {
   return createHash('md5').update(s, 'utf-8').digest('hex');
 }
@@ -90,7 +94,7 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
     headers: baseHeaders,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
-  const csrfData = await csrfRes.json().catch(() => null);
+  const csrfData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await csrfRes.json().catch(() => null));
   const csrfToken = csrfData && csrfData.data && csrfData.data.token;
   if (!csrfRes.ok || !csrfToken) {
     console.error(`[ERROR] goedge /csrf/token HTTP ${csrfRes.status}: ${JSON.stringify(csrfData)}`);
@@ -123,7 +127,7 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
     body: form.toString(),
     signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
   });
-  const loginData = await loginRes.json().catch(() => null);
+  const loginData = /** @type {{code?: number} | null} */ (await loginRes.json().catch(() => null));
   const cookieHeader = (loginRes.headers && loginRes.headers.get('set-cookie')) || '';
   const firstPair = cookieHeader.split(';')[0].trim();
   const eq = firstPair.indexOf('=');
@@ -191,7 +195,7 @@ async function goedgeImportBatch(cfg, session, listId, entries, fetchImpl = fetc
     headers: { 'User-Agent': UA, Cookie: session.cookie },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
-  const tokenData = await tokenRes.json().catch(() => null);
+  const tokenData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await tokenRes.json().catch(() => null));
   const csrfToken = tokenData && tokenData.data && tokenData.data.token;
   if (!tokenRes.ok || !csrfToken) {
     console.error(`[ERROR] goedge /csrf/token (import) HTTP ${tokenRes.status}`);
@@ -208,7 +212,7 @@ async function goedgeImportBatch(cfg, session, listId, entries, fetchImpl = fetc
     body: fd,
     signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
   });
-  const data = await res.json().catch(() => null);
+  const data = /** @type {{code?: number, data?: {count?: number, countIgnore?: number}} | null} */ (await res.json().catch(() => null));
   if (res.ok && data && data.code === 200) {
     const { count = 0, countIgnore = 0 } = data.data || {};
     if (countIgnore > 0) console.warn(`[WARN] goedge import: ${countIgnore} lines ignored by the panel`);
@@ -218,7 +222,11 @@ async function goedgeImportBatch(cfg, session, listId, entries, fetchImpl = fetc
   return { ok: false, landed: 0 };
 }
 
-/** True for normalized IPv6 entries (contain ':'). */
+/**
+ * True for normalized IPv6 entries (contain ':').
+ * @param {string} entry
+ * @returns {boolean}
+ */
 function isV6(entry) {
   return entry.includes(':');
 }

@@ -90,6 +90,8 @@ npm test
 
 Runs the test suite with Node's built-in `node:test` runner (3 test files). All network calls are mocked or overridden, so no live endpoints are touched.
 
+`npm run typecheck` runs the TypeScript compiler over the JSDoc-annotated sources (strict, `--noEmit`). There is no build step: production runs the plain JavaScript directly.
+
 ## Design notes
 
 - **Add-only everywhere**: the Cloudflare list and both CDN panels only ever gain entries; nothing is deleted, so the pipeline is safe to run repeatedly.

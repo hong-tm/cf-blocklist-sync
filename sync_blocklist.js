@@ -57,9 +57,18 @@ const CF_MAX_PAGES = 200; // pagination safety bound (500 * 200 = 100k items)
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = join(HERE, '.env');
 const REQUIRED_KEYS = ['CF_AUTH_TOKEN', 'CF_ACCOUNT_ID', 'CF_LIST_ID', 'URL_IPV4', 'URL_IPV6'];
+/** @param {{name: string, message?: string}} e */
 const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
 
 /**
+ * @typedef {{name: string, message?: string}} ErrLike
+ * @typedef {{entries: Set<string>, rejected: number}} FeedResult
+ * @typedef {{
+ *   success?: boolean,
+ *   errors?: Array<{code: number, message: string}>,
+ *   result?: Array<{ip?: string}>,
+ *   result_info?: {cursors?: {after?: string}},
+ * }} CfApiResponse
  * @typedef {{baseUrl: string, apiKey: string, apiSecret: string, wafConfigId: string}} CdnflyCfg
  * @typedef {{baseUrl: string, username: string, password: string, v4ListId: string, v6ListId: string}} GoedgeCfg
  * @typedef {{
@@ -76,6 +85,7 @@ const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
  * Load config from the .env file; OS environment variables override file
  * values. CDN sections are optional — a CDN is enabled only when its
  * BASE_URL is present.
+ * @returns {Config}
  */
 export function loadConfig(envFile = ENV_FILE, env = process.env) {
   /** @type {Map<string, string>} */
@@ -97,7 +107,7 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
   }
   const cdnfly = values.get('CDNFLY_BASE_URL')
     ? {
-        baseUrl: values.get('CDNFLY_BASE_URL'),
+        baseUrl: /** @type {string} */ (values.get('CDNFLY_BASE_URL')),
         apiKey: values.get('CDNFLY_API_KEY') ?? '',
         apiSecret: values.get('CDNFLY_API_SECRET') ?? '',
         wafConfigId: values.get('CDNFLY_WAF_CONFIG_ID') ?? 'global-0-openresty_config-openresty-config',
@@ -105,7 +115,7 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
     : null;
   const goedge = values.get('GOEDGE_BASE_URL')
     ? {
-        baseUrl: values.get('GOEDGE_BASE_URL'),
+        baseUrl: /** @type {string} */ (values.get('GOEDGE_BASE_URL')),
         username: values.get('GOEDGE_USERNAME') ?? '',
         password: values.get('GOEDGE_PASSWORD') ?? '',
         v4ListId: values.get('GOEDGE_V4_LIST_ID') ?? '',
@@ -113,16 +123,19 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
       }
     : null;
   return {
-    cfAuthToken: values.get('CF_AUTH_TOKEN'),
-    cfAccountId: values.get('CF_ACCOUNT_ID'),
-    cfListId: values.get('CF_LIST_ID'),
-    feedUrls: [values.get('URL_IPV4'), values.get('URL_IPV6')],
+    cfAuthToken: /** @type {string} */ (values.get('CF_AUTH_TOKEN')),
+    cfAccountId: /** @type {string} */ (values.get('CF_ACCOUNT_ID')),
+    cfListId: /** @type {string} */ (values.get('CF_LIST_ID')),
+    feedUrls: [/** @type {string} */ (values.get('URL_IPV4')), /** @type {string} */ (values.get('URL_IPV6'))],
     cdnfly,
     goedge,
   };
 }
 
-/** True for dotted-quad tokens whose octets have leading zeros (ambiguous decimal/octal). */
+/**
+ * True for dotted-quad tokens whose octets have leading zeros (ambiguous decimal/octal).
+ * @param {string} token
+ */
 function hasLeadingZeroOctets(token) {
   if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(token)) return false;
   return token.split('.').some((p) => p.length > 1 && p.startsWith('0'));
@@ -133,6 +146,7 @@ function hasLeadingZeroOctets(token) {
  * blank/comment/garbage lines. Notation variants (expanded vs compressed
  * IPv6) normalize to the same string, which is what makes set-based
  * deduplication exact.
+ * @param {string} raw
  */
 export function parseEntry(raw) {
   const stripped = raw.trim();
@@ -159,6 +173,8 @@ export function parseEntry(raw) {
  * Normalize a Cloudflare list item for comparison against feed entries.
  * Returns null for empty values; unparseable values keep their raw (trimmed)
  * form so they never collide with feed entries and are left in place.
+ * @param {string | null | undefined} raw
+ * @returns {string | null}
  */
 export function normalizeCfItem(raw) {
   const stripped = (raw ?? '').trim();
@@ -166,7 +182,11 @@ export function normalizeCfItem(raw) {
   return parseEntry(stripped) ?? stripped;
 }
 
-/** Union of all feed entries; duplicates collapse to one canonical form. */
+/**
+ * Union of all feed entries; duplicates collapse to one canonical form.
+ * @param {...FeedResult} results
+ * @returns {Set<string>}
+ */
 export function mergeFeeds(...results) {
   const merged = new Set();
   for (const r of results) for (const e of r.entries) merged.add(e);
@@ -176,6 +196,9 @@ export function mergeFeeds(...results) {
 /**
  * Feed entries missing from the current Cloudflare list (add-only diff).
  * Both sets must contain normalized strings; order-independent.
+ * @param {Set<string>} feedSet
+ * @param {Set<string>} cfSet
+ * @returns {string[]}
  */
 export function computeToAdd(feedSet, cfSet) {
   const toAdd = [...feedSet].filter((e) => !cfSet.has(e));
@@ -183,7 +206,12 @@ export function computeToAdd(feedSet, cfSet) {
   return toAdd;
 }
 
-/** Fetch one feed; returns its entries, normalized and deduplicated. */
+/**
+ * Fetch one feed; returns its entries, normalized and deduplicated.
+ * @param {string} url
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<FeedResult>}
+ */
 export async function fetchFeed(url, fetchImpl = fetch) {
   const host = new URL(url).hostname;
   const entries = new Set();
@@ -214,6 +242,10 @@ export async function fetchFeed(url, fetchImpl = fetch) {
   return { entries, rejected };
 }
 
+/**
+ * @param {Config} cfg
+ * @param {string | undefined} cursor
+ */
 function cfItemsUrl(cfg, cursor) {
   const base = `https://api.cloudflare.com/client/v4/accounts/${cfg.cfAccountId}/rules/lists/${cfg.cfListId}/items`;
   const params = new URLSearchParams({ per_page: String(CF_PAGE_SIZE) });
@@ -225,6 +257,9 @@ function cfItemsUrl(cfg, cursor) {
  * Read the current Cloudflare list via cursor pagination.
  * Returns { set, total } (normalized items, raw item count), or null on
  * failure — a failed read must abort the sync rather than re-add everything.
+ * @param {Config} cfg
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<{set: Set<string>, total: number} | null>}
  */
 export async function fetchCfItems(cfg, fetchImpl = fetch) {
   const set = new Set();
@@ -236,7 +271,7 @@ export async function fetchCfItems(cfg, fetchImpl = fetch) {
         headers: { Authorization: `Bearer ${cfg.cfAuthToken}` },
         signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
       });
-      const data = await res.json().catch(() => null);
+      const data = /** @type {CfApiResponse | null} */ (await res.json().catch(() => null));
       if (!res.ok || !data || data.success !== true) {
         console.error(`[ERROR] Cloudflare list read HTTP ${res.status}: ${JSON.stringify(data && data.errors ? data.errors : data)}`);
         return null;
@@ -261,6 +296,10 @@ export async function fetchCfItems(cfg, fetchImpl = fetch) {
  * Append items to the Cloudflare list in batches (POST is idempotent:
  * entries already present are replaced, never deleted). Returns true when
  * every batch was accepted.
+ * @param {Config} cfg
+ * @param {string[]} items
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<boolean>}
  */
 export async function addItemsToCf(cfg, items, fetchImpl = fetch) {
   const url = `https://api.cloudflare.com/client/v4/accounts/${cfg.cfAccountId}/rules/lists/${cfg.cfListId}/items`;
@@ -277,7 +316,7 @@ export async function addItemsToCf(cfg, items, fetchImpl = fetch) {
         body: JSON.stringify(batch.map((ip) => ({ ip }))), // BARE array body
         signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
       });
-      const data = await res.json().catch(() => null);
+      const data = /** @type {CfApiResponse | null} */ (await res.json().catch(() => null));
       if (res.ok && data && data.success === true) {
         done += batch.length;
       } else {

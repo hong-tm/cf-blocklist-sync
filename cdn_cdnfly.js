@@ -23,6 +23,7 @@ import { normalizeCfItem } from './sync_blocklist.js';
 const FETCH_TIMEOUT_MS = 30_000;
 const PUSH_TIMEOUT_MS = 60_000;
 const UA = 'cf-blocklist-sync/1.0';
+/** @param {{name: string, message?: string}} e */
 const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
 
 /**
@@ -38,6 +39,9 @@ const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
  * }} CdnflyResult
  */
 
+/**
+ * @param {CdnflyCfg} cfg
+ */
 function headers(cfg) {
   return { 'User-Agent': UA, 'api-key': cfg.apiKey, 'api-secret': cfg.apiSecret };
 }
@@ -55,7 +59,7 @@ export async function fetchCdnflyWafConfig(cfg, fetchImpl = fetch) {
       headers: headers(cfg),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    const data = await res.json().catch(() => null);
+    const data = /** @type {{code?: number, data?: Record<string, any>} | null} */ (await res.json().catch(() => null));
     if (!res.ok || !data || data.code !== 0 || !data.data) {
       console.error(`[ERROR] cdnfly config read HTTP ${res.status}: ${JSON.stringify(data)}`);
       return null;
@@ -89,7 +93,7 @@ export async function putCdnflyWafConfig(cfg, value, fetchImpl = fetch) {
       body: JSON.stringify({ value: JSON.stringify(value) }),
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     });
-    const data = await res.json().catch(() => null);
+    const data = /** @type {{code?: number} | null} */ (await res.json().catch(() => null));
     if (res.ok && data && data.code === 0) {
       return true;
     }

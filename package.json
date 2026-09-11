@@ -8,10 +8,15 @@
   },
   "scripts": {
     "sync": "node run_sync.js",
-    "test": "node --test test_sync_blocklist.js test_cdn_cdnfly.js test_cdn_goedge.js"
+    "test": "node --test test_sync_blocklist.js test_cdn_cdnfly.js test_cdn_goedge.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "ipaddr.js": "^2.5.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "typescript": "^7.0.2"
+  }
 }
