@@ -1,0 +1,16 @@
+{
+  "name": "cf-blocklist-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "sync": "node run_sync.js",
+    "test": "node --test test_sync_blocklist.js test_cdn_cdnfly.js test_cdn_goedge.js"
+  },
+  "dependencies": {
+    "ipaddr.js": "^2.5.0"
+  }
+}
