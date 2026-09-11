@@ -12,5 +12,6 @@
   },
   "dependencies": {
     "ipaddr.js": "^2.5.0"
-  }
+  },
+  "license": "MIT"
 }
