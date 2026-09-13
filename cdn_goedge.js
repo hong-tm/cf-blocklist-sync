@@ -27,6 +27,8 @@
 //      -> {"code":200,"data":{"count":N,"countIgnore":M}}. The file must be
 //      named *.txt; one entry per line. Lines with extra comma fields get
 //      expiredAt etc.; a bare IP is stored permanently (expiredAt=0).
+//      New entries are written "value,<expiredAt>" (unix seconds) with a
+//      one-year expiry (oneYearExpiry), not the bare-IP permanent default.
 //
 // The panel keeps two global blacklists: an IPv4 list and an IPv6 list
 // (GOEDGE_V4_LIST_ID / GOEDGE_V6_LIST_ID in .env). This client routes
@@ -181,15 +183,29 @@ export async function goedgeExportList(cfg, session, listId, fetchImpl = fetch) 
 }
 
 /**
+ * Unix seconds one calendar year after `nowMs`. GoEdge stores list items with
+ * `expiredAt` as unix seconds (0 = never); new entries are stamped with this
+ * so they expire a year after import instead of living forever.
+ * @param {number} [nowMs]
+ * @returns {number}
+ */
+export function oneYearExpiry(nowMs = Date.now()) {
+  const d = new Date(nowMs);
+  d.setUTCFullYear(d.getUTCFullYear() + 1);
+  return Math.floor(d.getTime() / 1000);
+}
+
+/**
  * Import one batch of entries into an IP list (multipart upload).
  * @param {GoedgeCfg} cfg
  * @param {GoedgeSession} session
  * @param {string} listId
  * @param {string[]} entries
+ * @param {number} expiredAt - unix seconds stamped onto every entry
  * @param {typeof fetch} fetchImpl
  * @returns {Promise<{ok: boolean, landed: number}>} landed = count − countIgnore
  */
-async function goedgeImportBatch(cfg, session, listId, entries, fetchImpl = fetch) {
+async function goedgeImportBatch(cfg, session, listId, entries, expiredAt, fetchImpl = fetch) {
   const base = cfg.baseUrl.replace(/\/$/, '');
   const tokenRes = await fetchImpl(`${base}/csrf/token`, {
     headers: { 'User-Agent': UA, Cookie: session.cookie },
@@ -205,7 +221,8 @@ async function goedgeImportBatch(cfg, session, listId, entries, fetchImpl = fetc
   const fd = new FormData();
   fd.append('listId', listId);
   fd.append('csrfToken', csrfToken);
-  fd.append('file', new Blob([`${entries.join('\n')}\n`], { type: 'text/plain' }), 'blocklist-sync.txt');
+  const lines = entries.map((e) => `${e},${expiredAt}`);
+  fd.append('file', new Blob([`${lines.join('\n')}\n`], { type: 'text/plain' }), 'blocklist-sync.txt');
   const res = await fetchImpl(`${base}/servers/iplists/import`, {
     method: 'POST',
     headers: { 'User-Agent': UA, Cookie: session.cookie },
@@ -241,15 +258,16 @@ function isV6(entry) {
  * @param {GoedgeSession} session
  * @param {string} listId
  * @param {string[]} toAdd
+ * @param {number} expiredAt - unix seconds stamped onto every entry
  * @param {typeof fetch} fetchImpl
  * @returns {Promise<number>} number of entries confirmed added
  */
-async function importIntoList(cfg, session, listId, toAdd, fetchImpl = fetch) {
+async function importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl = fetch) {
   let pending = [...toAdd];
   let added = 0;
   while (pending.length > 0) {
     const batch = pending.slice(0, IMPORT_BATCH);
-    const first = await goedgeImportBatch(cfg, session, listId, batch, fetchImpl);
+    const first = await goedgeImportBatch(cfg, session, listId, batch, expiredAt, fetchImpl);
     if (first.ok) {
       added += first.landed;
       pending = pending.slice(batch.length);
@@ -265,7 +283,7 @@ async function importIntoList(cfg, session, listId, toAdd, fetchImpl = fetch) {
       continue;
     }
     // Nothing landed: retry the same batch once.
-    const retry = await goedgeImportBatch(cfg, session, listId, batch, fetchImpl);
+    const retry = await goedgeImportBatch(cfg, session, listId, batch, expiredAt, fetchImpl);
     if (!retry.ok) break;
     added += retry.landed;
     pending = pending.slice(batch.length);
@@ -279,9 +297,11 @@ async function importIntoList(cfg, session, listId, toAdd, fetchImpl = fetch) {
  * @param {GoedgeCfg} cfg
  * @param {Set<string>} cfSet - normalized entries the CDN should also have
  * @param {typeof fetch} fetchImpl
+ * @param {number} [nowMs] - clock injection for deterministic tests
  * @returns {Promise<GoedgeResult>}
  */
-export async function syncGoedge(cfg, cfSet, fetchImpl = fetch) {
+export async function syncGoedge(cfg, cfSet, fetchImpl = fetch, nowMs = Date.now()) {
+  const expiredAt = oneYearExpiry(nowMs);
   const session = await goedgeLogin(cfg, fetchImpl);
   if (session === null) return { ok: false, added: 0, existing: 0, error: 'login failed' };
 
@@ -306,7 +326,7 @@ export async function syncGoedge(cfg, cfSet, fetchImpl = fetch) {
     const toAdd = wanted.filter((e) => !cur.has(e)).sort();
     console.log(`[INFO] goedge list ${listId}: existing=${cur.size} missing=${toAdd.length} (wanted: ${wanted.length})`);
     if (toAdd.length > 0) {
-      const n = await importIntoList(cfg, session, listId, toAdd, fetchImpl);
+      const n = await importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl);
       added += n;
       if (n < toAdd.length) ok = false;
     }

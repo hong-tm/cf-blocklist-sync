@@ -97,6 +97,6 @@ Runs the test suite with Node's built-in `node:test` runner (3 test files). All 
 - **Add-only everywhere**: the Cloudflare list and both CDN panels only ever gain entries; nothing is deleted, so the pipeline is safe to run repeatedly.
 - **Idempotent**: a run with nothing new to add exits 0 and changes nothing.
 - **Cloudflare**: missing entries are POSTed in batches of 500.
-- **GoEdge**: entries are imported in batches of 500; if a batch fails, the list is re-exported and re-diffed so only the truly missing entries are retried.
+- **GoEdge**: entries are imported in batches of 500; if a batch fails, the list is re-exported and re-diffed so only the truly missing entries are retried. New entries are stamped with a one-year `expiredAt` (unix seconds) instead of the panel's permanent default; existing entries are left untouched.
 - **Timeouts**: every outbound request uses per-request timeouts via `AbortSignal.timeout` (30 s for reads, 60 s for writes).
 - **Config**: loaded from `.env` with OS environment override; a missing required key aborts the run with exit 1.
