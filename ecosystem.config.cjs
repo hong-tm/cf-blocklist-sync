@@ -6,7 +6,7 @@ module.exports = {
       name: 'cf-blocklist-sync',
       script: 'run_sync.js',
       cwd: __dirname,
-      cron_restart: '0 12 * * *', // daily at 12:00 local time (Europe/London)
+      cron_restart: '0 12 * * *', // daily at 12:00 local time (Asia/Kuala_Lumpur)
       // One-shot app: a clean exit(0) must stop (wait for next cron tick),
       // while a failed run (non-zero exit) retries after restart_delay.
       stop_exit_codes: [0],
