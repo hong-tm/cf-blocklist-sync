@@ -19,6 +19,7 @@ IPv6 feed ─┘                                                          │
 - 从两条 IP 黑名单订阅源（IPv4 / IPv6）拉取数据，经解析、去重与校验后增量添加到 Cloudflare List，并把结果同步到 cdnfly 与 GoEdge 两个 CDN 面板。
 - 只增不删、可重复执行：Cloudflare 与两个 CDN 面板均只做增量添加，重复运行是安全的。
 - 通过 pm2 定时任务每天 12:00 本地时间自动运行，日志写入 /var/log/cf_sync.log。
+- 代码位于 `src/`：`main.js` 编排，`config/feed/cloudflare` 与两个 CDN 客户端各司其职，`ip.js`/`http.js` 为共享工具。
 - `npm test` 运行全部测试（网络调用均已 mock，不触碰线上端点）。
 
 ## What it does
@@ -29,6 +30,26 @@ This tool consumes two plain-text feed URLs (one for IPv4, one for IPv6) from it
 
 - Node.js >= 20 (built and tested on Node 26)
 - npm
+
+## Project structure
+
+```
+run_sync.js              # entry point: calls main(), maps the result to an exit code
+src/
+├── main.js              # orchestration: feeds → Cloudflare → CDN mirrors
+├── config.js            # .env loading (OS environment variables override)
+├── ip.js                # IP/CIDR parsing and normalization (ipaddr.js)
+├── feed.js              # feed fetch + the add-only set algebra
+├── http.js              # shared timeout budget + timeout classifier
+├── cloudflare.js        # Cloudflare Lists client (read, diff, batched POST)
+├── cdn_cdnfly.js        # cdnfly WAF openresty config client
+└── cdn_goedge.js        # GoEdge EdgeAdmin client (CSRF login, export, import)
+test_*.js                # node:test suites (all network calls mocked)
+```
+
+Dependencies run one way: the CDN clients and the feed/Cloudflare modules all
+depend on `src/ip.js` and `src/http.js`, never on the orchestrator that
+imports them.
 
 ## Install
 
@@ -98,5 +119,6 @@ Runs every `test_*.js` file with Node's built-in `node:test` runner (3 files tod
 - **Idempotent**: a run with nothing new to add exits 0 and changes nothing.
 - **Cloudflare**: missing entries are POSTed in batches of 500.
 - **GoEdge**: entries are imported in batches of 500; if a batch fails, the list is re-exported and re-diffed so only the truly missing entries are retried. New entries are stamped with a one-year `expiredAt` (unix seconds) instead of the panel's permanent default; existing entries are left untouched.
-- **Timeouts**: every outbound request uses per-request timeouts via `AbortSignal.timeout` (30 s for reads, 60 s for writes).
-- **Config**: loaded from `.env` with OS environment override; a missing required key aborts the run with exit 1.
+- **Timeouts**: every outbound request uses per-request timeouts via `AbortSignal.timeout` (30 s for reads, 60 s for writes), defined once in `src/http.js`. The timeout applies per request, not to a whole paginated read.
+- **Failure handling**: each IO function catches its own errors and returns a sentinel (`null`/`false`, or `{ok:false}` from the GoEdge sync) so one failing system degrades to a non-zero exit instead of aborting the process. A timeout on the GoEdge mirror therefore still leaves the Cloudflare and cdnfly results written; the next daily run recomputes the diff.
+- **Config**: loaded from `.env` at the project root with OS environment override; a missing required key aborts the run with exit 1.
