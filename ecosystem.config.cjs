@@ -1,5 +1,4 @@
 // pm2 process definition for the daily blocklist sync.
-// Usage: pm2 start ecosystem.config.cjs && pm2 save
 module.exports = {
   apps: [
     {

@@ -1,22 +1,10 @@
-// ─── cdnfly CDN sync ───
-//
-// The admin is a cdnfly-class panel that keeps its WAF blocklist
-// inside a global "openresty-config" value (a JSON string). The blacklist
-// lives in its `custom_black` field: one IP/CIDR per line, IPv4 and IPv6
-// mixed. Updates are a full-value PUT to /v1/configs/:id, so we must read
-// the value first and only ever append missing lines.
-//
-// Verified live (2026-09): GET/PUT with `api-key`/`api-secret` headers
-// work; a no-op PUT returns {"code":0,"msg":"更新config成功"} and triggers
-// the panel's config push to the nodes.
-//
-// Sync semantics (add-only, same as the Cloudflare step):
-//   existing = normalized set of current custom_black lines
-//   toAdd    = cfSet − existing
-//   write    = original custom_black lines + toAdd appended; all other
-//              fields of the config value are passed through untouched.
-// A failed read aborts the CDN sync (no write); a failed PUT leaves the
-// previous value in place and is retried on the next run.
+// cdnfly-class panel sync. The WAF blocklist lives in the `custom_black` field of a global
+// "openresty-config" value (a JSON string; one IP/CIDR per line, v4 and v6 mixed).
+// Auth: `api-key`/`api-secret` headers.
+// Updates are a FULL-value PUT to /v1/configs/:id — read the value first, append only the missing
+// lines, and pass every other field through untouched (a no-op PUT still pushes config to the nodes).
+// A failed read aborts with no write; a failed PUT leaves the previous value intact for the next run.
+// Verified live against the panel, 2026-09.
 
 import { normalizeCfItem } from './sync_blocklist.js';
 

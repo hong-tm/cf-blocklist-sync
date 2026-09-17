@@ -70,8 +70,6 @@ test('mergeFeeds: no feeds -> empty set', () => {
   assert.deepEqual(mergeFeeds(), new Set());
 });
 
-// ─── Cloudflare list read ───
-
 test('normalizeCfItem: canonical values pass through', () => {
   assert.equal(normalizeCfItem('1.2.3.4'), '1.2.3.4');
   assert.equal(normalizeCfItem('10.0.0.0/8'), '10.0.0.0/8');
@@ -87,8 +85,6 @@ test('normalizeCfItem: unparseable values keep raw form (left in place, never co
   assert.equal(normalizeCfItem(''), null);
   assert.equal(normalizeCfItem(null), null);
 });
-
-// ─── Add-only diff ───
 
 test('computeToAdd: returns feed entries missing from the CF list, sorted', () => {
   const feed = new Set(['1.2.3.4', '5.6.7.8', '9.9.9.9']);
@@ -110,8 +106,7 @@ test('computeToAdd: notation variants already in the list are not re-added', () 
   assert.deepEqual(computeToAdd(feed, cf), []);
 });
 
-// ─── Cursor-paginated list read (mocked fetch) ───
-
+// fetchImpl is mocked in the tests below; no live endpoints are touched.
 function fakeResponse(payload) {
   return { ok: true, status: 200, json: async () => payload };
 }
@@ -146,8 +141,6 @@ test('fetchCfItems: API failure -> null (sync must abort, not re-add everything)
   assert.equal(await fetchCfItems(CFG, fetchImpl), null);
 });
 
-// ─── Batched append (mocked fetch) ───
-
 test('addItemsToCf: batches items in bare-array POST bodies', async () => {
   const items = Array.from({ length: 1200 }, (_, i) => `10.0.${Math.floor(i / 256)}.${(i % 256) + 1}`);
   const calls = [];
@@ -167,8 +160,6 @@ test('addItemsToCf: rejected batch -> false', async () => {
   const fetchImpl = async () => ({ ok: false, status: 400, json: async () => ({ success: false, errors: [{ code: 10026, message: 'filters.api.invalid_json' }] }) });
   assert.equal(await addItemsToCf(CFG, ['1.1.1.1'], fetchImpl), false);
 });
-
-// ─── loadConfig ───
 
 test('loadConfig: missing required keys throws listing them', () => {
   const f = join(tmpdir(), 'cf-sync-test-missing.env');
@@ -197,8 +188,6 @@ test('loadConfig: OS env overrides file; CDN sections optional (null)', () => {
 test('loadConfig: unreadable env file throws', () => {
   assert.throws(() => loadConfig('/nonexistent/cf-sync.env', {}), /cannot read/);
 });
-
-// ─── Timeout/abort mapping (mocked fetch) ───
 
 test('fetchCfItems: TimeoutError maps to null + "timeout" log line', async () => {
   const fetchImpl = async () => {

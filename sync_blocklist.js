@@ -1,44 +1,13 @@
-#!/usr/bin/env node
-// ─── How to run ───
-// Manual one-shot sync:   node run_sync.js   (or: npm run sync)
-// Scheduled via pm2 (daily at 12:00 local):
-//   pm2 start ecosystem.config.cjs && pm2 save
-// Tests:
-//   node --test
-// Config: .env at the project root; OS environment variables override.
-// OS env vars override both.
-// Must not auto-run here: pm2 loads this file via import()
-// (ProcessContainerFork), which breaks argv[1]-based entry guards.
-// The entry point is run_sync.js.
-// ──────────────────
+// Must not auto-run here: pm2 loads this file via import() (ProcessContainerFork), which breaks argv[1] entry guards. Entry point: run_sync.js.
 
 /**
- * Sync IP blocklist feeds into a Cloudflare list, then mirror the
- * result into two self-hosted CDNs — all INCREMENTAL.
+ * Sync IP blocklist feeds into a Cloudflare list, then mirror the result into two self-hosted CDNs — add-only/incremental (per-run transfer is just the delta).
  *
- * Each run:
- *   1. downloads the v4 + v6 feeds, validates/normalizes (ipaddr.js) and
- *      deduplicates them (notation variants such as expanded vs compressed
- *      IPv6 collapse to the same string);
- *   2. reads the current Cloudflare list items (cursor pagination);
- *   3. uploads ONLY feed entries missing from the Cloudflare list;
- *   4. reads each CDN's current blacklist, and pushes ONLY entries that
- *      are in the Cloudflare list but missing from the CDN.
- *
- * Add-only everywhere: entries that leave a source stay in the lists, so
- * per-run transfer volume is just the delta, not the whole list.
- *
- * Cloudflare Lists API notes (verified against api.cloudflare.com, 2026):
- *   - Routes live under /accounts/{id}/rules/lists/{list_id}/items
- *     (GET /lists/{id}/items is no longer routed).
- *   - POST body is a BARE JSON array [{"ip": ...}]; it is idempotent for
- *     entries already present (replaces, never deletes).
- *   - DELETE body is WRAPPED {"items": [{"id": ...}]} (opposite of POST);
- *     async ops are limited to one pending operation per account.
- *   - All mutations are asynchronous and return an operation_id.
- *
- * CDN notes: see cdn_cdnfly.js and cdn_goedge.js for the per-panel API
- * details; both were verified live against the running panels in 2026-09.
+ * Cloudflare Lists API (verified against api.cloudflare.com, 2026):
+ * - Items route: /accounts/{id}/rules/lists/{list_id}/items (GET /lists/{id}/items is no longer routed).
+ * - POST body is a BARE JSON array [{"ip":...}]; idempotent (replaces, never deletes).
+ * - DELETE body is WRAPPED {"items":[{"id":...}]} (opposite of POST); one pending async op per account.
+ * - All mutations are async and return an operation_id. CDN per-panel details: see cdn_cdnfly.js and cdn_goedge.js (verified live, 2026-09).
  */
 
 import { readFileSync } from 'node:fs';
@@ -346,7 +315,6 @@ export async function main() {
     return 1;
   }
 
-  // ── Step: Cloudflare ──
   let cfOk = true;
   let refSet = current.set; // the Cloudflare list, as it stands after this run
   const toAdd = computeToAdd(merged, current.set);
@@ -365,7 +333,6 @@ export async function main() {
     }
   }
 
-  // ── Steps: CDNs (reference set = the Cloudflare list, add-only diff) ──
   let cdnOk = true;
   if (cfg.cdnfly) {
     const r = await syncCdnfly(cfg.cdnfly, refSet);

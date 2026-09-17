@@ -1,40 +1,15 @@
-// ─── goedge CDN sync ───
-//
-// The admin is a GoEdge (EdgeAdmin v1.x) panel. Its API is
-// session-based (no api-key), and every POST is guarded by a single-use
-// CSRF token. All of the following was verified live against this build
-// (v1.1.5) on 2026-09:
-//
-//   1. GET  /csrf/token                 -> {"code":200,"data":{"token":"..."}}
-//      (token = base64(sha256(secret+ts)); single-use, ~30 min TTL)
-//   2. GET  /                           -> login page HTML carrying
-//      window.X_VIEW_DATA = {..., "token":"<md5+ts>"} (login token, 30 min)
-//   3. POST /  (form-urlencoded)        -> login. Fields: token, username,
-//      password = MD5 hex of the real password (server compares against
-//      the stored hash; plaintext fails), otp_code, remember=on, csrfToken.
-//      Success: {"code":200,"data":{"ip","localSid","requireOTP":false}}
-//      plus Set-Cookie <session-cookie> (name is build-specific;
-//      upstream calls it "geadsid" — capture it from the
-//      response, never hardcode).
-//   4. Authenticated requests: plain Cookie header + a browser-like
-//      User-Agent (the panel's security filter rejects empty/search-engine
-//      UAs with a bare 403).
-//   5. GET  /servers/iplists/exportData?listId=N&format=txt
-//      -> full list, one line per item:
-//         value,expiredAt,type,eventLevel,reason   (note: this build maps
-//         params as camelCase "listId", unlike upstream "list_id")
-//   6. POST /servers/iplists/import (multipart: listId, csrfToken, file)
-//      -> {"code":200,"data":{"count":N,"countIgnore":M}}. The file must be
-//      named *.txt; one entry per line. Lines with extra comma fields get
-//      expiredAt etc.; a bare IP is stored permanently (expiredAt=0).
-//      New entries are written "value,<expiredAt>" (unix seconds) with a
-//      one-year expiry (oneYearExpiry), not the bare-IP permanent default.
-//
-// The panel keeps two global blacklists: an IPv4 list and an IPv6 list
-// (GOEDGE_V4_LIST_ID / GOEDGE_V6_LIST_ID in .env). This client routes
-// entries by family and imports each delta with import batches of 500.
-// A failed batch triggers a re-export + re-diff so partially created items
-// are never re-sent.
+// GoEdge (EdgeAdmin v1.x) sync — session-based (no API key), every POST guarded by a single-use CSRF token.
+// Protocol, verified live against this build, 2026-09:
+// - GET /csrf/token -> {"code":200,"data":{"token":...}}
+// - Login: POST / form-urlencoded with token (from window.X_VIEW_DATA on the login page), username,
+//   password = MD5 hex (plaintext is rejected), otp_code, remember=on, csrfToken.
+// - Session cookie name is build-specific: capture it from Set-Cookie, never hardcode.
+// - Authenticated requests need a browser-like User-Agent, else a bare 403.
+// - Export: GET /servers/iplists/exportData?listId=N&format=txt -> lines `value,expiredAt,type,eventLevel,reason`
+//   (camelCase `listId` here, unlike upstream `list_id`).
+// - Import: multipart POST /servers/iplists/import (listId, csrfToken, *.txt file) -> {"code":200,"data":{"count":N,"countIgnore":M}};
+//   entries are written `value,<expiredAt>` in unix seconds (a bare IP = permanent).
+// - Two global lists (v4/v6) routed by family, batches of 500; a failed batch re-exports + re-diffs, then retries once.
 
 import { createHash } from 'node:crypto';
 import { normalizeCfItem } from './sync_blocklist.js';
@@ -91,7 +66,6 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
   const base = cfg.baseUrl.replace(/\/$/, '');
   const baseHeaders = { 'User-Agent': UA };
 
-  // 1. fresh CSRF token (JSON response)
   const csrfRes = await fetchImpl(`${base}/csrf/token`, {
     headers: baseHeaders,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -103,7 +77,6 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
     return null;
   }
 
-  // 2. login page token (embedded in the page shell)
   const pageRes = await fetchImpl(`${base}/`, {
     headers: baseHeaders,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -115,7 +88,6 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
     return null;
   }
 
-  // 3. login (password is sent as MD5 hex — plaintext is rejected)
   const form = new URLSearchParams();
   form.set('token', pageToken);
   form.set('username', cfg.username);

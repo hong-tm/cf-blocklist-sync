@@ -1,6 +1,6 @@
 # cf-blocklist-sync
 
-A Node.js batch CLI that keeps IP blocklists in sync across four systems: two text-based IP blocklist feeds, a Cloudflare List, and two CDN admin panels. On every run it fetches the IPv4 and IPv6 feeds, parses and dedupes the entries, adds whatever is missing to the Cloudflare List, then mirrors the resulting reference set to a cdnfly-class panel (via its WAF openresty config) and to GoEdge/EdgeAdmin panels. The sync is add-only and idempotent, and it is scheduled daily with pm2.
+A Node.js batch CLI that keeps IP blocklists in sync across four systems: two text-based IP blocklist feeds, a Cloudflare List, and two CDN admin panels.
 
 ```
 IPv4 feed ─┐
@@ -88,7 +88,7 @@ The pm2 ecosystem runs the sync daily at 12:00 local time (cron `0 12 * * *`) an
 npm test
 ```
 
-Runs the test suite with Node's built-in `node:test` runner (3 test files). All network calls are mocked or overridden, so no live endpoints are touched.
+Runs every `test_*.js` file with Node's built-in `node:test` runner (3 files today). All network calls are mocked or overridden, so no live endpoints are touched.
 
 `npm run typecheck` runs the TypeScript compiler over the JSDoc-annotated sources (strict, `--noEmit`). There is no build step: production runs the plain JavaScript directly.
 
