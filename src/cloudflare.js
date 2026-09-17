@@ -7,6 +7,7 @@
 // - All mutations are async and return an operation_id.
 
 import { normalizeCfItem } from './ip.js';
+import { PUSH_TIMEOUT_MS, timedOut } from './http.js';
 
 /** @typedef {import('./config.js').Config} Config */
 
@@ -19,12 +20,9 @@ import { normalizeCfItem } from './ip.js';
  * }} CfApiResponse */
 
 export const MAX_ITEMS = 10_000; // Cloudflare list capacity (free/standard plans)
-const PUSH_TIMEOUT_MS = 60_000;
 const CF_PAGE_SIZE = 500; // API max per_page for GET items
 const CF_BATCH_SIZE = 500; // items per POST; steady-state deltas are far smaller
 const CF_MAX_PAGES = 200; // pagination safety bound (500 * 200 = 100k items)
-/** @param {{name: string, message?: string}} e */
-const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
 
 /**
  * @param {Config} cfg

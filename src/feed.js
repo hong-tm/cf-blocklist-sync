@@ -1,10 +1,7 @@
 // Feed fetching plus the add-only set algebra (union, diff).
 
 import { parseEntry } from './ip.js';
-
-const FETCH_TIMEOUT_MS = 30_000;
-/** @param {{name: string, message?: string}} e */
-const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
+import { FETCH_TIMEOUT_MS, timedOut } from './http.js';
 
 /**
  * @typedef {{entries: Set<string>, rejected: number}} FeedResult

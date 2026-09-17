@@ -13,9 +13,8 @@
 
 import { createHash } from 'node:crypto';
 import { normalizeCfItem } from './ip.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS } from './http.js';
 
-const FETCH_TIMEOUT_MS = 30_000;
-const PUSH_TIMEOUT_MS = 60_000;
 const IMPORT_BATCH = 500;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
 

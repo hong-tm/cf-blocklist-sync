@@ -7,12 +7,9 @@
 // Verified live against the panel, 2026-09.
 
 import { normalizeCfItem } from './ip.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
 
-const FETCH_TIMEOUT_MS = 30_000;
-const PUSH_TIMEOUT_MS = 60_000;
 const UA = 'cf-blocklist-sync/1.0';
-/** @param {{name: string, message?: string}} e */
-const timedOut = (e) => e.name === 'AbortError' || e.name === 'TimeoutError';
 
 /**
  * @typedef {{baseUrl: string, apiKey: string, apiSecret: string, wafConfigId: string}} CdnflyCfg

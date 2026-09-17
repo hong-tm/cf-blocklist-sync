@@ -16,6 +16,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 │   ├── main.js            # main(): orchestrates feeds → Cloudflare → CDNs; returns 0/1
 │   ├── config.js          # loadConfig + ENV_FILE (resolves to ../.env, i.e. the project root)
 │   ├── ip.js              # parseEntry/normalizeCfItem — shared by the feed parser and both CDN clients
+│   ├── http.js            # shared timeout budget (FETCH/PUSH_TIMEOUT_MS) + timedOut classifier
 │   ├── feed.js            # fetchFeed, mergeFeeds, computeToAdd (add-only set algebra)
 │   ├── cloudflare.js      # Cloudflare Lists client: cursor read, batched POST, MAX_ITEMS
 │   ├── cdn_cdnfly.js      # cdnfly WAF openresty config client (read value, append, full PUT)
@@ -65,10 +66,11 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | `goedgeExportList` | async fn | src/cdn_goedge.js | Export one IP list → normalized set |
 | `oneYearExpiry` | fn | src/cdn_goedge.js | Unix-seconds expiry one year from now |
 | `syncGoedge` | async fn | src/cdn_goedge.js | Login, route v4/v6, batched import with re-export retry |
+| `timedOut` | fn | src/http.js | Classifies AbortError/TimeoutError so callers log `timeout` |
 
 ## CONVENTIONS
 - Every outbound HTTP call takes `fetchImpl = fetch` as its last injectable param — tests depend on it; keep the parameter.
-- Per-request timeouts via `AbortSignal.timeout`: 30 s reads (`FETCH_TIMEOUT_MS`), 60 s writes (`PUSH_TIMEOUT_MS`).
+- Per-request timeouts via `AbortSignal.timeout`: 30 s reads (`FETCH_TIMEOUT_MS`), 60 s writes (`PUSH_TIMEOUT_MS`) — both defined once in `src/http.js`, which also owns `timedOut`.
 - Batches of 500 everywhere: `CF_PAGE_SIZE`, `CF_BATCH_SIZE` (src/cloudflare.js), `IMPORT_BATCH` (src/cdn_goedge.js).
 - Add-only invariant: nothing is ever deleted from any list; re-running is safe and idempotent.
 - JSDoc `@typedef` / `@param` / `@returns` are load-bearing for the strict `checkJs` type check — keep them accurate.
