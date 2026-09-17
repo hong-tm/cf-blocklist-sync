@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { md5hex, parseXViewData, goedgeLogin, goedgeExportList, syncGoedge, oneYearExpiry } from './cdn_goedge.js';
+import { md5hex, parseXViewData, goedgeLogin, goedgeExportList, syncGoedge, oneYearExpiry } from './src/cdn_goedge.js';
 
 const BASE = 'http://edge.example';
 const CFG = {

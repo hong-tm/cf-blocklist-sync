@@ -12,7 +12,7 @@
 // - Two global lists (v4/v6) routed by family, batches of 500; a failed batch re-exports + re-diffs, then retries once.
 
 import { createHash } from 'node:crypto';
-import { normalizeCfItem } from './sync_blocklist.js';
+import { normalizeCfItem } from './ip.js';
 
 const FETCH_TIMEOUT_MS = 30_000;
 const PUSH_TIMEOUT_MS = 60_000;

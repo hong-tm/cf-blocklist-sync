@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cdnflyBlackSet, appendToCdnflyBlack, fetchCdnflyWafConfig, putCdnflyWafConfig, syncCdnfly } from './cdn_cdnfly.js';
+import { cdnflyBlackSet, appendToCdnflyBlack, fetchCdnflyWafConfig, putCdnflyWafConfig, syncCdnfly } from './src/cdn_cdnfly.js';
 
 // Fully expanded form of V6_COMPRESSED: exactly 8 groups. A 9-group "expanded"
 // string is invalid IPv6 and parseEntry() rejects it.

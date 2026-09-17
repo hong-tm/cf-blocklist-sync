@@ -6,7 +6,7 @@
 // A failed read aborts with no write; a failed PUT leaves the previous value intact for the next run.
 // Verified live against the panel, 2026-09.
 
-import { normalizeCfItem } from './sync_blocklist.js';
+import { normalizeCfItem } from './ip.js';
 
 const FETCH_TIMEOUT_MS = 30_000;
 const PUSH_TIMEOUT_MS = 60_000;

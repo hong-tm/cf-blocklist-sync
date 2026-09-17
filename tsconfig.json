@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["*.js", "*.cjs"],
+  "include": ["*.js", "*.cjs", "src/**/*.js"],
   "exclude": ["test_*.js", "node_modules"]
 }

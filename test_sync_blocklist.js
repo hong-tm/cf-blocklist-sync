@@ -2,8 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { parseEntry, mergeFeeds, normalizeCfItem, computeToAdd, fetchCfItems, addItemsToCf, loadConfig } from './sync_blocklist.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseEntry, normalizeCfItem } from './src/ip.js';
+import { mergeFeeds, computeToAdd } from './src/feed.js';
+import { fetchCfItems, addItemsToCf } from './src/cloudflare.js';
+import { loadConfig, ENV_FILE } from './src/config.js';
 
 const V6_EXPANDED = '2001:0db8:0000:0000:0000:0000:0000:0001';
 const V6_COMPRESSED = '2001:db8::1';
@@ -187,6 +191,11 @@ test('loadConfig: OS env overrides file; CDN sections optional (null)', () => {
 
 test('loadConfig: unreadable env file throws', () => {
   assert.throws(() => loadConfig('/nonexistent/cf-sync.env', {}), /cannot read/);
+});
+
+// Guards the src/ move: a relocated config.js must not shift the default .env path to src/.env.
+test('ENV_FILE: default env path resolves to the project root, not src/', () => {
+  assert.equal(ENV_FILE, join(dirname(fileURLToPath(import.meta.url)), '.env'));
 });
 
 test('fetchCfItems: TimeoutError maps to null + "timeout" log line', async () => {
