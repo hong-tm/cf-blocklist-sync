@@ -76,6 +76,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 - JSDoc `@typedef` / `@param` / `@returns` are load-bearing for the strict `checkJs` type check — keep them accurate.
 - Logs use bracketed prefixes `[INFO]/[SUCCESS]/[WARN]/[ERROR]/[ABORT]/[DONE]/[FATAL]`.
 - IO helpers return `null`/`false` on failure so the caller aborts instead of re-adding everything.
+- Every IO entry point catches its own errors (including thrown timeouts) and degrades to a sentinel; `src/cdn_goedge.js` returns `{ok:false}` from `syncGoedge` rather than letting a timeout escape to `run_sync.js` as `[FATAL]`.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - Do NOT add a top-level auto-run guard to `src/main.js`. pm2 loads the entry point via `import()` (`ProcessContainerFork`), which breaks `argv[1]`-style entry guards; `run_sync.js` is the entry point.

@@ -11,7 +11,6 @@ import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
 
 /** @typedef {import('./config.js').Config} Config */
 
-/** @typedef {{name: string, message?: string}} ErrLike */
 /** @typedef {{
  *   success?: boolean,
  *   errors?: Array<{code: number, message: string}>,

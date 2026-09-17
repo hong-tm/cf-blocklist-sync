@@ -217,6 +217,41 @@ test('syncGoedge: failed login -> {ok:false} before any import', async () => {
   assert.ok(result.error.includes('login'));
 });
 
+test('syncGoedge: timeout -> {ok:false} instead of throwing', async () => {
+  const fetchImpl = async () => {
+    const e = new Error('x');
+    e.name = 'TimeoutError';
+    throw e;
+  };
+  const result = await syncGoedge(CFG, new Set(['1.1.1.1']), fetchImpl);
+  assert.equal(result.ok, false);
+  assert.equal(result.added, 0);
+});
+
+test('syncGoedge: mid-run timeout after login degrades that list, keeps going', async () => {
+  let exportCalls = 0;
+  const fetchImpl = async (url, opts) => {
+    if (url === `${BASE}/csrf/token`) return jsonOk({ code: 200, data: { token: 'CT1' } });
+    if (url === `${BASE}/`) {
+      if (opts?.method === 'POST') return loginOk('mysid=xyz; Path=/');
+      return htmlOk(LOGIN_PAGE);
+    }
+    if (url.includes('exportData')) {
+      exportCalls += 1;
+      if (exportCalls === 1) {
+        const e = new Error('x');
+        e.name = 'TimeoutError';
+        throw e;
+      }
+      return { ok: true, status: 200, text: async () => '' };
+    }
+    throw new Error('unexpected: ' + url);
+  };
+  const result = await syncGoedge(CFG, new Set(['1.1.1.1']), fetchImpl);
+  assert.equal(result.ok, false);
+  assert.equal(exportCalls, 2); // the second list was still attempted
+});
+
 test('goedge requests carry per-request AbortSignal timeouts', async () => {
   const signals = [];
   const fetchImpl = async (url, opts) => {

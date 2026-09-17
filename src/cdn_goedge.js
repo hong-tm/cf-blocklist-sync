@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import { normalizeCfItem } from './ip.js';
-import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS } from './http.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
 
 const IMPORT_BATCH = 500;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
@@ -65,51 +65,56 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
   const base = cfg.baseUrl.replace(/\/$/, '');
   const baseHeaders = { 'User-Agent': UA };
 
-  const csrfRes = await fetchImpl(`${base}/csrf/token`, {
-    headers: baseHeaders,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  const csrfData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await csrfRes.json().catch(() => null));
-  const csrfToken = csrfData && csrfData.data && csrfData.data.token;
-  if (!csrfRes.ok || !csrfToken) {
-    console.error(`[ERROR] goedge /csrf/token HTTP ${csrfRes.status}: ${JSON.stringify(csrfData)}`);
-    return null;
-  }
+  try {
+    const csrfRes = await fetchImpl(`${base}/csrf/token`, {
+      headers: baseHeaders,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    const csrfData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await csrfRes.json().catch(() => null));
+    const csrfToken = csrfData && csrfData.data && csrfData.data.token;
+    if (!csrfRes.ok || !csrfToken) {
+      console.error(`[ERROR] goedge /csrf/token HTTP ${csrfRes.status}: ${JSON.stringify(csrfData)}`);
+      return null;
+    }
 
-  const pageRes = await fetchImpl(`${base}/`, {
-    headers: baseHeaders,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  const pageData = parseXViewData(await pageRes.text());
-  const pageToken = pageData && pageData.token;
-  if (!pageRes.ok || !pageToken) {
-    console.error(`[ERROR] goedge login page HTTP ${pageRes.status}`);
-    return null;
-  }
+    const pageRes = await fetchImpl(`${base}/`, {
+      headers: baseHeaders,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    const pageData = parseXViewData(await pageRes.text());
+    const pageToken = pageData && pageData.token;
+    if (!pageRes.ok || !pageToken) {
+      console.error(`[ERROR] goedge login page HTTP ${pageRes.status}`);
+      return null;
+    }
 
-  const form = new URLSearchParams();
-  form.set('token', pageToken);
-  form.set('username', cfg.username);
-  form.set('password', md5hex(cfg.password));
-  form.set('otp_code', '');
-  form.set('remember', 'on');
-  form.set('csrfToken', csrfToken);
-  const loginRes = await fetchImpl(`${base}/`, {
-    method: 'POST',
-    headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form.toString(),
-    signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
-  });
-  const loginData = /** @type {{code?: number} | null} */ (await loginRes.json().catch(() => null));
-  const cookieHeader = (loginRes.headers && loginRes.headers.get('set-cookie')) || '';
-  const firstPair = cookieHeader.split(';')[0].trim();
-  const eq = firstPair.indexOf('=');
-  if (!loginRes.ok || !loginData || loginData.code !== 200 || eq < 1) {
-    console.error(`[ERROR] goedge login HTTP ${loginRes.status}: ${JSON.stringify(loginData)}`);
+    const form = new URLSearchParams();
+    form.set('token', pageToken);
+    form.set('username', cfg.username);
+    form.set('password', md5hex(cfg.password));
+    form.set('otp_code', '');
+    form.set('remember', 'on');
+    form.set('csrfToken', csrfToken);
+    const loginRes = await fetchImpl(`${base}/`, {
+      method: 'POST',
+      headers: { ...baseHeaders, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    });
+    const loginData = /** @type {{code?: number} | null} */ (await loginRes.json().catch(() => null));
+    const cookieHeader = (loginRes.headers && loginRes.headers.get('set-cookie')) || '';
+    const firstPair = cookieHeader.split(';')[0].trim();
+    const eq = firstPair.indexOf('=');
+    if (!loginRes.ok || !loginData || loginData.code !== 200 || eq < 1) {
+      console.error(`[ERROR] goedge login HTTP ${loginRes.status}: ${JSON.stringify(loginData)}`);
+      return null;
+    }
+    console.log(`[INFO] goedge: logged in as ${cfg.username}`);
+    return { cookie: firstPair };
+  } catch (e) {
+    console.error(`[ERROR] goedge login: ${timedOut(e) ? 'timeout' : e.message}`);
     return null;
   }
-  console.log(`[INFO] goedge: logged in as ${cfg.username}`);
-  return { cookie: firstPair };
 }
 
 /**
@@ -119,16 +124,21 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
  * @param {typeof fetch} fetchImpl
  */
 async function goedgeFetch(cfg, session, path, fetchImpl = fetch) {
-  const res = await fetchImpl(`${cfg.baseUrl.replace(/\/$/, '')}${path}`, {
-    headers: { 'User-Agent': UA, Cookie: session.cookie },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    console.error(`[ERROR] goedge GET ${path} HTTP ${res.status}: ${text.slice(0, 200)}`);
+  try {
+    const res = await fetchImpl(`${cfg.baseUrl.replace(/\/$/, '')}${path}`, {
+      headers: { 'User-Agent': UA, Cookie: session.cookie },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      console.error(`[ERROR] goedge GET ${path} HTTP ${res.status}: ${text.slice(0, 200)}`);
+      return null;
+    }
+    return res;
+  } catch (e) {
+    console.error(`[ERROR] goedge GET ${path}: ${timedOut(e) ? 'timeout' : e.message}`);
     return null;
   }
-  return res;
 }
 
 /**
@@ -178,36 +188,41 @@ export function oneYearExpiry(nowMs = Date.now()) {
  */
 async function goedgeImportBatch(cfg, session, listId, entries, expiredAt, fetchImpl = fetch) {
   const base = cfg.baseUrl.replace(/\/$/, '');
-  const tokenRes = await fetchImpl(`${base}/csrf/token`, {
-    headers: { 'User-Agent': UA, Cookie: session.cookie },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  const tokenData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await tokenRes.json().catch(() => null));
-  const csrfToken = tokenData && tokenData.data && tokenData.data.token;
-  if (!tokenRes.ok || !csrfToken) {
-    console.error(`[ERROR] goedge /csrf/token (import) HTTP ${tokenRes.status}`);
+  try {
+    const tokenRes = await fetchImpl(`${base}/csrf/token`, {
+      headers: { 'User-Agent': UA, Cookie: session.cookie },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    const tokenData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await tokenRes.json().catch(() => null));
+    const csrfToken = tokenData && tokenData.data && tokenData.data.token;
+    if (!tokenRes.ok || !csrfToken) {
+      console.error(`[ERROR] goedge /csrf/token (import) HTTP ${tokenRes.status}`);
+      return { ok: false, landed: 0 };
+    }
+
+    const fd = new FormData();
+    fd.append('listId', listId);
+    fd.append('csrfToken', csrfToken);
+    const lines = entries.map((e) => `${e},${expiredAt}`);
+    fd.append('file', new Blob([`${lines.join('\n')}\n`], { type: 'text/plain' }), 'blocklist-sync.txt');
+    const res = await fetchImpl(`${base}/servers/iplists/import`, {
+      method: 'POST',
+      headers: { 'User-Agent': UA, Cookie: session.cookie },
+      body: fd,
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    });
+    const data = /** @type {{code?: number, data?: {count?: number, countIgnore?: number}} | null} */ (await res.json().catch(() => null));
+    if (res.ok && data && data.code === 200) {
+      const { count = 0, countIgnore = 0 } = data.data || {};
+      if (countIgnore > 0) console.warn(`[WARN] goedge import: ${countIgnore} lines ignored by the panel`);
+      return { ok: true, landed: count - countIgnore };
+    }
+    console.error(`[ERROR] goedge import HTTP ${res.status}: ${JSON.stringify(data)}`);
+    return { ok: false, landed: 0 };
+  } catch (e) {
+    console.error(`[ERROR] goedge import: ${timedOut(e) ? 'timeout' : e.message}`);
     return { ok: false, landed: 0 };
   }
-
-  const fd = new FormData();
-  fd.append('listId', listId);
-  fd.append('csrfToken', csrfToken);
-  const lines = entries.map((e) => `${e},${expiredAt}`);
-  fd.append('file', new Blob([`${lines.join('\n')}\n`], { type: 'text/plain' }), 'blocklist-sync.txt');
-  const res = await fetchImpl(`${base}/servers/iplists/import`, {
-    method: 'POST',
-    headers: { 'User-Agent': UA, Cookie: session.cookie },
-    body: fd,
-    signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
-  });
-  const data = /** @type {{code?: number, data?: {count?: number, countIgnore?: number}} | null} */ (await res.json().catch(() => null));
-  if (res.ok && data && data.code === 200) {
-    const { count = 0, countIgnore = 0 } = data.data || {};
-    if (countIgnore > 0) console.warn(`[WARN] goedge import: ${countIgnore} lines ignored by the panel`);
-    return { ok: true, landed: count - countIgnore };
-  }
-  console.error(`[ERROR] goedge import HTTP ${res.status}: ${JSON.stringify(data)}`);
-  return { ok: false, landed: 0 };
 }
 
 /**
