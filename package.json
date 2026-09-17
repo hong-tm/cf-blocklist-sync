@@ -8,7 +8,7 @@
   },
   "scripts": {
     "sync": "node run_sync.js",
-    "test": "node --test test_sync_blocklist.js test_cdn_cdnfly.js test_cdn_goedge.js",
+    "test": "node --test \"test_*.js\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
