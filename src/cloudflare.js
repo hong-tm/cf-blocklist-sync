@@ -7,7 +7,7 @@
 // - All mutations are async and return an operation_id.
 
 import { normalizeCfItem } from './ip.js';
-import { PUSH_TIMEOUT_MS, timedOut } from './http.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
 
 /** @typedef {import('./config.js').Config} Config */
 
@@ -51,7 +51,7 @@ export async function fetchCfItems(cfg, fetchImpl = fetch) {
     for (let page = 0; page < CF_MAX_PAGES; page++) {
       const res = await fetchImpl(cfItemsUrl(cfg, cursor), {
         headers: { Authorization: `Bearer ${cfg.cfAuthToken}` },
-        signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       const data = /** @type {CfApiResponse | null} */ (await res.json().catch(() => null));
       if (!res.ok || !data || data.success !== true) {
