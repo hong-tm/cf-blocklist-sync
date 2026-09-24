@@ -94,7 +94,7 @@ export async function addItemsToCf(cfg, items, fetchImpl = fetch) {
           Authorization: `Bearer ${cfg.cfAuthToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(batch.map((ip) => ({ ip }))), // BARE array body
+        body: JSON.stringify(batch.map((ip) => ({ ip }))),
         signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
       });
       const data = /** @type {CfApiResponse | null} */ (await res.json().catch(() => null));
