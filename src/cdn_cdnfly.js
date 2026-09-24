@@ -7,7 +7,8 @@
 // Verified live against the panel, 2026-09.
 
 import { normalizeCfItem } from './ip.js';
-import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut, trimTrailingSlash } from './http.js';
+import { computeToAdd } from './diff.js';
 
 const UA = 'cf-blocklist-sync/1.0';
 
@@ -38,7 +39,7 @@ function headers(cfg) {
  * @returns {Promise<Record<string, any> | null>} the decoded value, or null on failure
  */
 export async function fetchCdnflyWafConfig(cfg, fetchImpl = fetch) {
-  const url = `${cfg.baseUrl.replace(/\/$/, '')}/v1/configs/${cfg.wafConfigId}`;
+  const url = `${trimTrailingSlash(cfg.baseUrl)}/v1/configs/${cfg.wafConfigId}`;
   try {
     const res = await fetchImpl(url, {
       headers: headers(cfg),
@@ -70,7 +71,7 @@ export async function fetchCdnflyWafConfig(cfg, fetchImpl = fetch) {
  * @returns {Promise<boolean>}
  */
 export async function putCdnflyWafConfig(cfg, value, fetchImpl = fetch) {
-  const url = `${cfg.baseUrl.replace(/\/$/, '')}/v1/configs/${cfg.wafConfigId}`;
+  const url = `${trimTrailingSlash(cfg.baseUrl)}/v1/configs/${cfg.wafConfigId}`;
   try {
     const res = await fetchImpl(url, {
       method: 'PUT',
@@ -131,7 +132,7 @@ export async function syncCdnfly(cfg, cfSet, fetchImpl = fetch) {
   if (value === null) return { ok: false, added: 0, existing: 0, error: 'read failed' };
 
   const existing = cdnflyBlackSet(value.custom_black);
-  const toAdd = [...cfSet].filter((e) => !existing.has(e)).sort();
+  const toAdd = computeToAdd(cfSet, existing);
   console.log(`[INFO] cdnfly: existing=${existing.size} missing=${toAdd.length} (reference set: ${cfSet.size})`);
 
   if (toAdd.length === 0) {
