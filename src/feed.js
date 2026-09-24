@@ -1,4 +1,4 @@
-// Feed fetching plus the add-only set algebra (union, diff).
+// Feed fetching plus feed merging (the union of all feed entries).
 
 import { parseEntry } from './ip.js';
 import { FETCH_TIMEOUT_MS, timedOut } from './http.js';
@@ -54,15 +54,3 @@ export function mergeFeeds(...results) {
   return merged;
 }
 
-/**
- * Feed entries missing from the current Cloudflare list (add-only diff).
- * Both sets must contain normalized strings; order-independent.
- * @param {Set<string>} feedSet
- * @param {Set<string>} cfSet
- * @returns {string[]}
- */
-export function computeToAdd(feedSet, cfSet) {
-  const toAdd = [...feedSet].filter((e) => !cfSet.has(e));
-  toAdd.sort();
-  return toAdd;
-}
