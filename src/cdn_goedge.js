@@ -13,7 +13,8 @@
 
 import { createHash } from 'node:crypto';
 import { normalizeCfItem } from './ip.js';
-import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut } from './http.js';
+import { FETCH_TIMEOUT_MS, PUSH_TIMEOUT_MS, timedOut, trimTrailingSlash } from './http.js';
+import { computeToAdd } from './diff.js';
 
 const IMPORT_BATCH = 500;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
@@ -51,6 +52,36 @@ export function parseXViewData(html) {
 }
 
 /**
+ * Fetch a single-use CSRF token from /csrf/token (GET, read timeout).
+ * Does not catch: errors propagate to the caller's handler, as before.
+ * @param {string} base - base URL with the trailing slash already stripped
+ * @param {{'User-Agent': string, Cookie?: string}} headers
+ * @param {typeof fetch} fetchImpl
+ * @returns {Promise<{res: Response, data: {code?: number, data?: {token?: string}} | null, token: string | null | undefined}>}
+ */
+async function fetchCsrfToken(base, headers, fetchImpl) {
+  const res = await fetchImpl(`${base}/csrf/token`, {
+    headers,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  const data = /** @type {{code?: number, data?: {token?: string}} | null} */ (await res.json().catch(() => null));
+  const token = data && data.data && data.data.token;
+  return { res, data, token };
+}
+
+/**
+ * First name=value pair of the Set-Cookie header ('' when absent), plus the
+ * index of '=' (-1 when missing); login validates eq >= 1.
+ * @param {Headers} headers
+ * @returns {{firstPair: string, eq: number}}
+ */
+function firstCookiePair(headers) {
+  const cookieHeader = (headers && headers.get('set-cookie')) || '';
+  const firstPair = cookieHeader.split(';')[0].trim();
+  return { firstPair, eq: firstPair.indexOf('=') };
+}
+
+/**
  * @typedef {{cookie: string}} GoedgeSession
  */
 
@@ -62,16 +93,11 @@ export function parseXViewData(html) {
  * @returns {Promise<GoedgeSession | null>}
  */
 export async function goedgeLogin(cfg, fetchImpl = fetch) {
-  const base = cfg.baseUrl.replace(/\/$/, '');
+  const base = trimTrailingSlash(cfg.baseUrl);
   const baseHeaders = { 'User-Agent': UA };
 
   try {
-    const csrfRes = await fetchImpl(`${base}/csrf/token`, {
-      headers: baseHeaders,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const csrfData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await csrfRes.json().catch(() => null));
-    const csrfToken = csrfData && csrfData.data && csrfData.data.token;
+    const { res: csrfRes, data: csrfData, token: csrfToken } = await fetchCsrfToken(base, baseHeaders, fetchImpl);
     if (!csrfRes.ok || !csrfToken) {
       console.error(`[ERROR] goedge /csrf/token HTTP ${csrfRes.status}: ${JSON.stringify(csrfData)}`);
       return null;
@@ -102,9 +128,7 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     });
     const loginData = /** @type {{code?: number} | null} */ (await loginRes.json().catch(() => null));
-    const cookieHeader = (loginRes.headers && loginRes.headers.get('set-cookie')) || '';
-    const firstPair = cookieHeader.split(';')[0].trim();
-    const eq = firstPair.indexOf('=');
+    const { firstPair, eq } = firstCookiePair(loginRes.headers);
     if (!loginRes.ok || !loginData || loginData.code !== 200 || eq < 1) {
       console.error(`[ERROR] goedge login HTTP ${loginRes.status}: ${JSON.stringify(loginData)}`);
       return null;
@@ -125,7 +149,7 @@ export async function goedgeLogin(cfg, fetchImpl = fetch) {
  */
 async function goedgeFetch(cfg, session, path, fetchImpl = fetch) {
   try {
-    const res = await fetchImpl(`${cfg.baseUrl.replace(/\/$/, '')}${path}`, {
+    const res = await fetchImpl(`${trimTrailingSlash(cfg.baseUrl)}${path}`, {
       headers: { 'User-Agent': UA, Cookie: session.cookie },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
@@ -156,7 +180,7 @@ export async function goedgeExportList(cfg, session, listId, fetchImpl = fetch) 
   const set = new Set();
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const value = line.split(',')[0].trim(); // export line: value,expiredAt,type,eventLevel,reason
+    const value = line.split(',')[0].trim();
     const norm = normalizeCfItem(value);
     if (norm !== null) set.add(norm);
   }
@@ -187,14 +211,9 @@ export function oneYearExpiry(nowMs = Date.now()) {
  * @returns {Promise<{ok: boolean, landed: number}>} landed = count − countIgnore
  */
 async function goedgeImportBatch(cfg, session, listId, entries, expiredAt, fetchImpl = fetch) {
-  const base = cfg.baseUrl.replace(/\/$/, '');
+  const base = trimTrailingSlash(cfg.baseUrl);
   try {
-    const tokenRes = await fetchImpl(`${base}/csrf/token`, {
-      headers: { 'User-Agent': UA, Cookie: session.cookie },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const tokenData = /** @type {{code?: number, data?: {token?: string}} | null} */ (await tokenRes.json().catch(() => null));
-    const csrfToken = tokenData && tokenData.data && tokenData.data.token;
+    const { res: tokenRes, token: csrfToken } = await fetchCsrfToken(base, { 'User-Agent': UA, Cookie: session.cookie }, fetchImpl);
     if (!tokenRes.ok || !csrfToken) {
       console.error(`[ERROR] goedge /csrf/token (import) HTTP ${tokenRes.status}`);
       return { ok: false, landed: 0 };
@@ -309,7 +328,7 @@ export async function syncGoedge(cfg, cfSet, fetchImpl = fetch, nowMs = Date.now
       continue;
     }
     existing += cur.size;
-    const toAdd = wanted.filter((e) => !cur.has(e)).sort();
+    const toAdd = computeToAdd(wanted, cur);
     console.log(`[INFO] goedge list ${listId}: existing=${cur.size} missing=${toAdd.length} (wanted: ${wanted.length})`);
     if (toAdd.length > 0) {
       const n = await importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl);
