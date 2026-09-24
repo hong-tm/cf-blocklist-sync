@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEntry, normalizeCfItem } from './src/ip.js';
-import { mergeFeeds, computeToAdd } from './src/feed.js';
+import { mergeFeeds } from './src/feed.js';
+import { computeToAdd } from './src/diff.js';
 import { fetchCfItems, addItemsToCf } from './src/cloudflare.js';
 import { loadConfig, ENV_FILE } from './src/config.js';
 
