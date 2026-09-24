@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 只给本项目开 snapshot。全局 ~/.config/opencode/opencode.jsonc 保持 false：
+  // opencode 以 cwd=/root 跑时 snapshot 会扫整个 /root 工作树，CPU 打满并 OOM。
+  // snapshot 的扫描范围是会话目录（git 命令用 cwd=会话目录 + pathspec "."），
+  // 本项目实测 1 个未跟踪/已改文件。
+  "snapshot": true
+}
