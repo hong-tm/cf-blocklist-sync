@@ -19,7 +19,7 @@ IPv6 feed ─┘                                                          │
 - 从两条 IP 黑名单订阅源（IPv4 / IPv6）拉取数据，经解析、去重与校验后增量添加到 Cloudflare List，并把结果同步到 cdnfly 与 GoEdge 两个 CDN 面板。
 - 只增不删、可重复执行：Cloudflare 与两个 CDN 面板均只做增量添加，重复运行是安全的。
 - 通过 pm2 定时任务每天 12:00 本地时间自动运行，日志写入 /var/log/cf_sync.log。
-- 代码位于 `src/`：`main.js` 编排，`config/feed/cloudflare` 与两个 CDN 客户端各司其职，`ip.js`/`http.js` 为共享工具。
+- 代码位于 `src/`：`main.js` 编排，`config/feed/cloudflare` 与两个 CDN 客户端各司其职，`ip.js`/`http.js`/`diff.js` 为共享工具。
 - `npm test` 运行全部测试（网络调用均已 mock，不触碰线上端点）。
 
 ## What it does
@@ -39,7 +39,8 @@ src/
 ├── main.js              # orchestration: feeds → Cloudflare → CDN mirrors
 ├── config.js            # .env loading (OS environment variables override)
 ├── ip.js                # IP/CIDR parsing and normalization (ipaddr.js)
-├── feed.js              # feed fetch + the add-only set algebra
+├── feed.js              # feed fetching + merging (union of feed entries)
+├── diff.js              # shared add-only diff (reference set minus the current one, sorted)
 ├── http.js              # shared timeout budget + timeout classifier
 ├── cloudflare.js        # Cloudflare Lists client (read, diff, batched POST)
 ├── cdn_cdnfly.js        # cdnfly WAF openresty config client
@@ -48,8 +49,8 @@ test_*.js                # node:test suites (all network calls mocked)
 ```
 
 Dependencies run one way: the CDN clients and the feed/Cloudflare modules all
-depend on `src/ip.js` and `src/http.js`, never on the orchestrator that
-imports them.
+depend on `src/ip.js`, `src/http.js` and `src/diff.js`, never on the
+orchestrator that imports them.
 
 ## Install
 

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-09-17
-**Commit:** 88c399a
+**Generated:** 2026-09-24
+**Commit:** 02a9f8c
 **Branch:** main
 
 ## OVERVIEW
@@ -16,8 +16,9 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 │   ├── main.js            # main(): orchestrates feeds → Cloudflare → CDNs; returns 0/1
 │   ├── config.js          # loadConfig + ENV_FILE (resolves to ../.env, i.e. the project root)
 │   ├── ip.js              # parseEntry/normalizeCfItem — shared by the feed parser and both CDN clients
-│   ├── http.js            # shared timeout budget (FETCH/PUSH_TIMEOUT_MS) + timedOut classifier
-│   ├── feed.js            # fetchFeed, mergeFeeds, computeToAdd (add-only set algebra)
+│   ├── http.js            # shared timeout budget (FETCH/PUSH_TIMEOUT_MS), timedOut, trimTrailingSlash
+│   ├── feed.js            # fetchFeed, mergeFeeds (union of feed entries)
+│   ├── diff.js            # computeToAdd: shared add-only diff (main + both CDN clients)
 │   ├── cloudflare.js      # Cloudflare Lists client: cursor read, batched POST, MAX_ITEMS
 │   ├── cdn_cdnfly.js      # cdnfly WAF openresty config client (read value, append, full PUT)
 │   └── cdn_goedge.js      # GoEdge EdgeAdmin client: CSRF/login, export, multipart import
@@ -36,6 +37,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 |---|---|---|
 | Change what a run does | `src/main.js` → `main()` | Orchestrates CF then CDNs; exit code from here |
 | Add/fix a feed parser rule | `src/ip.js` → `parseEntry` | ipaddr.js; rejects leading-zero octets |
+| Change the add-only diff | `src/diff.js` → `computeToAdd` | Shared by the Cloudflare sync and both CDN mirrors |
 | Change Cloudflare IO | `src/cloudflare.js` | `fetchCfItems` (cursor pages), `addItemsToCf` (bare-array POST) |
 | Change cdnfly behavior | `src/cdn_cdnfly.js` | Value is a JSON string with `custom_black` field |
 | Change GoEdge behavior | `src/cdn_goedge.js` | Session + CSRF; see file header for live-verified API notes |
@@ -46,12 +48,15 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | Symbol | Type | Location | Role |
 |---|---|---|---|
 | `main` | async fn | src/main.js | Full run; returns 0/1 |
+| `syncCloudflare` | async fn | src/main.js | CF read + add-only delta; null when the list read fails |
+| `syncCdnMirrors` | async fn | src/main.js | Push the reference set to the enabled CDN mirrors |
 | `loadConfig` | fn | src/config.js | Parse `.env`, OS env overrides; throws on missing required keys |
 | `ENV_FILE` | const | src/config.js | Default `.env` path — project root, i.e. `../.env` from `src/` |
 | `parseEntry` | fn | src/ip.js | One feed line → canonical IP/CIDR or null |
+| `hasLeadingZeroOctets` | fn (internal) | src/ip.js | Rejects dotted-quad IPv4 with leading-zero octets (decimal/octal ambiguity) |
 | `normalizeCfItem` | fn | src/ip.js | Normalize a stored item for diffing (unparsable kept raw) |
 | `mergeFeeds` | fn | src/feed.js | Union of feed entry sets |
-| `computeToAdd` | fn | src/feed.js | Add-only diff (feed − existing), sorted |
+| `computeToAdd` | fn | src/diff.js | Add-only diff (reference minus existing), sorted |
 | `fetchFeed` | async fn | src/feed.js | Fetch + parse one feed; errors → empty set |
 | `fetchCfItems` | async fn | src/cloudflare.js | Paginate CF list; returns set or null (abort on null) |
 | `addItemsToCf` | async fn | src/cloudflare.js | Batch POST missing items; true only if all batches ok |
@@ -67,9 +72,10 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | `oneYearExpiry` | fn | src/cdn_goedge.js | Unix-seconds expiry one year from now |
 | `syncGoedge` | async fn | src/cdn_goedge.js | Login, route v4/v6, batched import with re-export retry |
 | `timedOut` | fn | src/http.js | Classifies AbortError/TimeoutError so callers log `timeout` |
+| `trimTrailingSlash` | fn | src/http.js | Strip one trailing slash from a panel base URL |
 
 ## CONVENTIONS
-- Every outbound HTTP call takes `fetchImpl = fetch` as its last injectable param — tests depend on it; keep the parameter.
+- Every outbound HTTP call takes `fetchImpl = fetch` as an injectable param — tests depend on it; keep the parameter. It is last except in `syncGoedge`, where the optional `nowMs` clock follows it.
 - Per-request timeouts via `AbortSignal.timeout`: 30 s reads (`FETCH_TIMEOUT_MS`), 60 s writes (`PUSH_TIMEOUT_MS`) — both defined once in `src/http.js`, which also owns `timedOut`.
 - Batches of 500 everywhere: `CF_PAGE_SIZE`, `CF_BATCH_SIZE` (src/cloudflare.js), `IMPORT_BATCH` (src/cdn_goedge.js).
 - Add-only invariant: nothing is ever deleted from any list; re-running is safe and idempotent.
