@@ -48,9 +48,9 @@ src/
 test_*.js                # node:test suites (all network calls mocked)
 ```
 
-Dependencies run one way: the CDN clients and the feed/Cloudflare modules all
-depend on `src/ip.js`, `src/http.js` and `src/diff.js`, never on the
-orchestrator that imports them.
+Dependencies run one way. The CDN clients and the feed/Cloudflare modules all
+depend on `src/ip.js` and `src/http.js`, and the orchestrator plus both CDN
+clients depend on `src/diff.js`. Nothing depends on the orchestrator itself.
 
 ## Install
 
