@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEntry, normalizeCfItem } from './src/ip.js';
-import { mergeFeeds } from './src/feed.js';
+import { fetchFeed, mergeFeeds } from './src/feed.js';
 import { computeToAdd } from './src/diff.js';
 import { fetchCfItems, addItemsToCf } from './src/cloudflare.js';
 import { loadConfig, ENV_FILE } from './src/config.js';
+import { syncCloudflare, syncCdnMirrors } from './src/main.js';
 
 const V6_EXPANDED = '2001:0db8:0000:0000:0000:0000:0000:0001';
 const V6_COMPRESSED = '2001:db8::1';
@@ -114,6 +115,10 @@ test('computeToAdd: notation variants already in the list are not re-added', () 
 // fetchImpl is mocked in the tests below; no live endpoints are touched.
 function fakeResponse(payload) {
   return { ok: true, status: 200, json: async () => payload };
+}
+
+function textResponse(body, { ok = true, status = 200 } = {}) {
+  return { ok, status, text: async () => body };
 }
 
 const CFG = { cfAuthToken: 't', cfAccountId: 'a', cfListId: 'l', feedUrls: [] };
@@ -231,4 +236,154 @@ test('fetchCfItems: AbortError still maps to "timeout" (pin)', async () => {
   } finally {
     console.error = orig;
   }
+});
+
+// --- fetchFeed + the main() orchestration steps ---
+
+test('fetchFeed: normalizes, dedupes, and sends UA + a timeout signal', async () => {
+  let seen;
+  const body = ['1.2.3.4', '1.2.3.4', V6_EXPANDED, '10.0.0.0/8  extra column', '', '# comment'].join('\n');
+  const fetchImpl = async (url, opts) => {
+    seen = { url, opts };
+    return textResponse(body);
+  };
+  const { entries, rejected } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+  assert.deepEqual(entries, new Set(['1.2.3.4', '10.0.0.0/8', V6_COMPRESSED]));
+  assert.equal(rejected, 0);
+  assert.equal(seen.url, 'https://feeds.example/v4.txt');
+  assert.equal(seen.opts.headers['User-Agent'], 'cf-blocklist-sync/1.0');
+  assert.ok(seen.opts.signal instanceof AbortSignal);
+});
+
+test('fetchFeed: unparseable lines counted, comments and blanks not', async () => {
+  const fetchImpl = async () => textResponse('not-an-ip\n# comment\n\n1.2.3.4\n');
+  const { entries, rejected } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+  assert.deepEqual(entries, new Set(['1.2.3.4']));
+  assert.equal(rejected, 1);
+});
+
+test('fetchFeed: HTTP error -> empty set, no throw', async () => {
+  const errs = [];
+  const orig = console.error;
+  console.error = (msg) => errs.push(String(msg));
+  try {
+    const fetchImpl = async () => textResponse('nope', { ok: false, status: 503 });
+    const { entries, rejected } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+    assert.deepEqual(entries, new Set());
+    assert.equal(rejected, 0);
+  } finally {
+    console.error = orig;
+  }
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /\[ERROR\] feed fetch failed \(feeds\.example\): HTTP 503$/);
+});
+
+test('fetchFeed: timeout -> empty set with a "timeout" log', async () => {
+  const errs = [];
+  const orig = console.error;
+  console.error = (msg) => errs.push(String(msg));
+  try {
+    const fetchImpl = async () => {
+      const e = new Error('x');
+      e.name = 'TimeoutError';
+      throw e;
+    };
+    const { entries } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+    assert.deepEqual(entries, new Set());
+  } finally {
+    console.error = orig;
+  }
+  assert.match(errs[0], /\[ERROR\] feed fetch failed \(feeds\.example\): timeout$/);
+});
+
+test('fetchFeed: an unparseable feed URL throws instead of being swallowed', async () => {
+  await assert.rejects(() => fetchFeed('not-a-url', async () => textResponse('')), TypeError);
+});
+
+test('syncCloudflare: posts only the missing items and returns the widened refSet', async () => {
+  const posts = [];
+  const fetchImpl = async (_url, opts) => {
+    if (opts.method === 'POST') {
+      posts.push(JSON.parse(opts.body));
+      return fakeResponse({ success: true, result: { operation_id: 'op' } });
+    }
+    return fakeResponse({ success: true, result: [{ ip: '1.1.1.1' }], result_info: {} });
+  };
+  const out = await syncCloudflare(CFG, new Set(['1.1.1.1', '2.2.2.2']), fetchImpl);
+  assert.deepEqual(out, { ok: true, refSet: new Set(['1.1.1.1', '2.2.2.2']) });
+  assert.deepEqual(posts, [[{ ip: '2.2.2.2' }]]);
+});
+
+test('syncCloudflare: nothing missing -> no POST', async () => {
+  const posts = [];
+  const fetchImpl = async (_url, opts) => {
+    if (opts.method === 'POST') posts.push(opts.body);
+    return fakeResponse({ success: true, result: [{ ip: '1.1.1.1' }], result_info: {} });
+  };
+  const out = await syncCloudflare(CFG, new Set(['1.1.1.1']), fetchImpl);
+  assert.deepEqual(out, { ok: true, refSet: new Set(['1.1.1.1']) });
+  assert.equal(posts.length, 0);
+});
+
+test('syncCloudflare: read failure -> null, so the caller aborts before the mirrors', async () => {
+  const fetchImpl = async () => ({ ok: false, status: 403, json: async () => ({ success: false, errors: [] }) });
+  assert.equal(await syncCloudflare(CFG, new Set(['1.1.1.1']), fetchImpl), null);
+});
+
+test('syncCloudflare: add failure -> ok:false but keeps the pre-existing refSet', async () => {
+  const fetchImpl = async (_url, opts) => {
+    if (opts.method === 'POST') return { ok: false, status: 400, json: async () => ({ success: false, errors: [] }) };
+    return fakeResponse({ success: true, result: [{ ip: '1.1.1.1' }], result_info: {} });
+  };
+  const out = await syncCloudflare(CFG, new Set(['1.1.1.1', '2.2.2.2']), fetchImpl);
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.refSet, new Set(['1.1.1.1']));
+});
+
+test('syncCloudflare: warns when the list would exceed MAX_ITEMS', async () => {
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (msg) => warns.push(String(msg));
+  try {
+    const full = Array.from({ length: 10_000 }, () => ({ ip: '1.1.1.1' }));
+    const fetchImpl = async (_url, opts) => {
+      if (opts.method === 'POST') return fakeResponse({ success: true, result: { operation_id: 'op' } });
+      return fakeResponse({ success: true, result: full, result_info: {} });
+    };
+    const out = await syncCloudflare(CFG, new Set(['1.1.1.1', '2.2.2.2']), fetchImpl);
+    assert.equal(out.ok, true);
+    assert.equal(warns.length, 1);
+    assert.match(warns[0], /\[WARN\] Cloudflare list would reach 10001 items/);
+  } finally {
+    console.warn = orig;
+  }
+});
+
+test('syncCdnMirrors: both disabled -> true without any request', async () => {
+  const fetchImpl = async () => { throw new Error('no request expected'); };
+  const cfg = { ...CFG, cdnfly: null, goedge: null };
+  assert.equal(await syncCdnMirrors(cfg, new Set(['1.2.3.4']), fetchImpl), true);
+});
+
+test('syncCdnMirrors: cdnfly success -> true', async () => {
+  const cfg = {
+    ...CFG,
+    cdnfly: { baseUrl: 'http://cdn.example', apiKey: 'k', apiSecret: 's', wafConfigId: 'global-0-openresty_config' },
+    goedge: null,
+  };
+  const fetchImpl = async (_url, opts) => {
+    if (opts.method === 'PUT') return fakeResponse({ code: 0, msg: 'ok' });
+    return fakeResponse({ code: 0, data: { value: JSON.stringify({ custom_black: '1.2.3.4' }) } });
+  };
+  assert.equal(await syncCdnMirrors(cfg, new Set(['1.2.3.4', '5.6.7.8']), fetchImpl), true);
+});
+
+test('syncCdnMirrors: one failing mirror -> false', async () => {
+  const cfg = {
+    ...CFG,
+    cdnfly: null,
+    goedge: { baseUrl: 'http://edge.example', username: 'u', password: 'p', v4ListId: '4', v6ListId: '5' },
+  };
+  const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({ code: 500 }) });
+  assert.equal(await syncCdnMirrors(cfg, new Set(['1.2.3.4']), fetchImpl), false);
 });

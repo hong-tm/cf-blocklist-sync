@@ -17,10 +17,11 @@ import { syncGoedge } from './cdn_goedge.js';
  * Cloudflare step: read the list, add the feed delta (add-only).
  * @param {Config} cfg
  * @param {Set<string>} feedSet - merged feed entries
+ * @param {typeof fetch} fetchImpl
  * @returns {Promise<{ok: boolean, refSet: Set<string>} | null>} null when the list read fails
  */
-async function syncCloudflare(cfg, feedSet) {
-  const current = await fetchCfItems(cfg);
+export async function syncCloudflare(cfg, feedSet, fetchImpl = fetch) {
+  const current = await fetchCfItems(cfg, fetchImpl);
   if (current === null) {
     console.error('[ABORT] could not read current Cloudflare list; lists left untouched');
     return null;
@@ -35,7 +36,7 @@ async function syncCloudflare(cfg, feedSet) {
     if (current.total + toAdd.length > MAX_ITEMS) {
       console.warn(`[WARN] Cloudflare list would reach ${current.total + toAdd.length} items, over the ${MAX_ITEMS} capacity; continuing anyway`);
     }
-    ok = await addItemsToCf(cfg, toAdd);
+    ok = await addItemsToCf(cfg, toAdd, fetchImpl);
     if (ok) {
       console.log(`[SUCCESS] added ${toAdd.length} new items to the Cloudflare list (feed: ${feedSet.size}, list total now ~${current.total + toAdd.length})`);
       refSet = new Set([...current.set, ...toAdd]);
@@ -50,18 +51,19 @@ async function syncCloudflare(cfg, feedSet) {
  * CDN mirror step: push refSet to cdnfly and GoEdge when enabled.
  * @param {Config} cfg
  * @param {Set<string>} refSet
+ * @param {typeof fetch} fetchImpl
  * @returns {Promise<boolean>}
  */
-async function syncCdnMirrors(cfg, refSet) {
+export async function syncCdnMirrors(cfg, refSet, fetchImpl = fetch) {
   let cdnOk = true;
   if (cfg.cdnfly) {
-    const r = await syncCdnfly(cfg.cdnfly, refSet);
+    const r = await syncCdnfly(cfg.cdnfly, refSet, fetchImpl);
     if (!r.ok) cdnOk = false;
   } else {
     console.log('[INFO] cdnfly sync disabled (no CDNFLY_BASE_URL)');
   }
   if (cfg.goedge) {
-    const r = await syncGoedge(cfg.goedge, refSet);
+    const r = await syncGoedge(cfg.goedge, refSet, fetchImpl);
     if (!r.ok) cdnOk = false;
   } else {
     console.log('[INFO] goedge sync disabled (no GOEDGE_BASE_URL)');
