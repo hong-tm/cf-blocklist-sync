@@ -1,8 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-09-24
-**Commit:** 02a9f8c
-**Branch:** main
 
 ## OVERVIEW
 Node.js >= 20 ESM batch CLI (`type: module`, no build step — plain JS + JSDoc types, `tsc --noEmit` only).
@@ -94,7 +92,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 ## COMMANDS
 ```bash
 npm install                 # deps (ipaddr.js)
-npm run sync                # or: node run_sync.js — one-shot sync
+npm run sync                # or: node run_sync.js — one-shot sync; writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync
 npm test                    # node --test "test_*.js"
 npm run typecheck           # tsc --noEmit (strict checkJs over *.js/*.cjs)
 pm2 start ecosystem.config.cjs && pm2 save   # enable the daily cron
@@ -108,3 +106,21 @@ Exit-code contract: `0` = success (including "nothing to add"); `1` = at least o
 - The cdnfly and GoEdge mirrors are enabled only when `CDNFLY_BASE_URL` / `GOEDGE_BASE_URL` is set; otherwise the step is skipped with an `[INFO]` log.
 - Cloudflare list capacity is 10,000 (`MAX_ITEMS`); exceeding it only logs a `[WARN]` and continues.
 - `.env` is read from the project root; OS environment variables override file values. `src/config.js` derives that path from its own location (`../.env`), so moving it without adjusting `ENV_FILE` aims config at `src/.env` — production fails while the other `loadConfig` tests (which all pass explicit paths) stay green. Only the `ENV_FILE` test guards it.
+
+---
+
+# Agent workflow (four beats)
+
+The four beats (isolate → build → prove → ship) — with their companion skills, the multi-agent rules, and the public-comment attribution conventions — are adapted from the michaelshimeles/skills AGENTS.md (commit 4b72f46). This repo's own additions are the two sections below.
+
+- **Isolate** — start each change in its own branch off `origin/main`, never directly on `main`.
+- **Build** — write the change to the repo's architecture and conventions.
+- **Prove** — run the repo's checks (below) and keep the evidence that the change works.
+- **Ship** — open the PR with that evidence in the description.
+
+Checks for this repo: the `npm test` and `npm run typecheck` entries in the COMMANDS block above.
+
+Hard invariants:
+
+- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. It is pm2-managed on the production host, not locally.
+- `test_cdn_cdnfly.js` and `test_cdn_goedge.js` are unit tests: they use injected `fetchImpl` stubs and fake hosts (`http://cdn.example`, `http://edge.example`), run as part of `npm test`, and are safe to run locally.
