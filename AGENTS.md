@@ -92,7 +92,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 ## COMMANDS
 ```bash
 npm install                 # deps (ipaddr.js)
-npm run sync                # or: node run_sync.js — one-shot sync; never run outside the documented sync setup (writes production)
+npm run sync                # or: node run_sync.js — one-shot sync; writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync
 npm test                    # node --test "test_*.js"
 npm run typecheck           # tsc --noEmit (strict checkJs over *.js/*.cjs)
 pm2 start ecosystem.config.cjs && pm2 save   # enable the daily cron
@@ -111,11 +111,16 @@ Exit-code contract: `0` = success (including "nothing to add"); `1` = at least o
 
 # Agent workflow (four beats)
 
-The four beats (isolate → build → prove → ship) — with their companion skills, the multi-agent rules, and the public-comment attribution conventions — are adapted from the michaelshimeles/skills AGENTS.md (commit 4b72b46). This repo's own additions are the two sections below.
+The four beats (isolate → build → prove → ship) — with their companion skills, the multi-agent rules, and the public-comment attribution conventions — are adapted from the michaelshimeles/skills AGENTS.md (commit 4b72f46). This repo's own additions are the two sections below.
+
+- **Isolate** — start each change in its own branch off `origin/main`, never directly on `main`.
+- **Build** — write the change to the repo's architecture and conventions.
+- **Prove** — run the repo's checks (below) and keep the evidence that the change works.
+- **Ship** — open the PR with that evidence in the description.
 
 Checks for this repo: the `npm test` and `npm run typecheck` entries in the COMMANDS block above.
 
 Hard invariants:
 
-- Never run `npm run sync` outside the documented sync setup: it writes the production blocklist. It is pm2-managed on the production host, not locally.
+- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. It is pm2-managed on the production host, not locally.
 - `test_cdn_cdnfly.js` and `test_cdn_goedge.js` are unit tests: they use injected `fetchImpl` stubs and fake hosts (`http://cdn.example`, `http://edge.example`), run as part of `npm test`, and are safe to run locally.
