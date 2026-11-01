@@ -1,8 +1,6 @@
 # PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-09-24
-**Commit:** 02a9f8c
-**Branch:** main
 
 ## OVERVIEW
 Node.js >= 20 ESM batch CLI (`type: module`, no build step — plain JS + JSDoc types, `tsc --noEmit` only).
@@ -108,3 +106,22 @@ Exit-code contract: `0` = success (including "nothing to add"); `1` = at least o
 - The cdnfly and GoEdge mirrors are enabled only when `CDNFLY_BASE_URL` / `GOEDGE_BASE_URL` is set; otherwise the step is skipped with an `[INFO]` log.
 - Cloudflare list capacity is 10,000 (`MAX_ITEMS`); exceeding it only logs a `[WARN]` and continues.
 - `.env` is read from the project root; OS environment variables override file values. `src/config.js` derives that path from its own location (`../.env`), so moving it without adjusting `ENV_FILE` aims config at `src/.env` — production fails while the other `loadConfig` tests (which all pass explicit paths) stay green. Only the `ENV_FILE` test guards it.
+
+---
+
+# Agent workflow (four beats)
+
+四拍流程（isolate → build → prove → ship）、配套技能、多 agent 规矩与公开评论的署名规则都写在
+`/root/.agents/reference/repo-workflow.md`，动手前读它。本仓库自己的部分只有下面两节。
+
+Checks for this repo:
+
+```bash
+npm test          # node --test "test_*.js"
+npm run typecheck # tsc --noEmit
+```
+
+Hard invariants:
+
+- Never run `npm run sync` here: it writes the production blocklist. It is pm2-managed on the production host, not locally.
+- `test_cdn_*.js` scripts talk to live CDN endpoints; treat them as production checks, not unit tests.
