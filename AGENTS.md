@@ -92,7 +92,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 ## COMMANDS
 ```bash
 npm install                 # deps (ipaddr.js)
-npm run sync                # or: node run_sync.js — one-shot sync
+npm run sync                # or: node run_sync.js — one-shot sync; never run outside the documented sync setup (writes production)
 npm test                    # node --test "test_*.js"
 npm run typecheck           # tsc --noEmit (strict checkJs over *.js/*.cjs)
 pm2 start ecosystem.config.cjs && pm2 save   # enable the daily cron
@@ -111,17 +111,11 @@ Exit-code contract: `0` = success (including "nothing to add"); `1` = at least o
 
 # Agent workflow (four beats)
 
-四拍流程（isolate → build → prove → ship）、配套技能、多 agent 规矩与公开评论的署名规则都写在
-`/root/.agents/reference/repo-workflow.md`，动手前读它。本仓库自己的部分只有下面两节。
+The four beats (isolate → build → prove → ship) — with their companion skills, the multi-agent rules, and the public-comment attribution conventions — are adapted from the michaelshimeles/skills AGENTS.md (commit 4b72b46). This repo's own additions are the two sections below.
 
-Checks for this repo:
-
-```bash
-npm test          # node --test "test_*.js"
-npm run typecheck # tsc --noEmit
-```
+Checks for this repo: the `npm test` and `npm run typecheck` entries in the COMMANDS block above.
 
 Hard invariants:
 
-- Never run `npm run sync` here: it writes the production blocklist. It is pm2-managed on the production host, not locally.
-- `test_cdn_*.js` scripts talk to live CDN endpoints; treat them as production checks, not unit tests.
+- Never run `npm run sync` outside the documented sync setup: it writes the production blocklist. It is pm2-managed on the production host, not locally.
+- `test_cdn_cdnfly.js` and `test_cdn_goedge.js` are unit tests: they use injected `fetchImpl` stubs and fake hosts (`http://cdn.example`, `http://edge.example`), run as part of `npm test`, and are safe to run locally.
