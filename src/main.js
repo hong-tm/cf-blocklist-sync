@@ -71,21 +71,33 @@ export async function syncCdnMirrors(cfg, refSet, fetchImpl = fetch) {
   return cdnOk;
 }
 
-export async function main() {
-  const cfg = loadConfig();
-  const results = await Promise.all(cfg.feedUrls.map((url) => fetchFeed(url)));
+/**
+ * Full run. A failed feed does not stop the sync of the entries that were
+ * fetched, but it makes the run exit 1 so pm2 retries it.
+ * @param {Config} [cfg]
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<number>} exit code
+ */
+export async function main(cfg = loadConfig(), fetchImpl = fetch) {
+  const results = await Promise.all(cfg.feedUrls.map((url) => fetchFeed(url, fetchImpl)));
   const merged = mergeFeeds(...results);
   if (merged.size === 0) {
     console.error('[ABORT] no valid entries fetched; all lists left untouched');
     return 1;
   }
+  const failedFeeds = results.filter((r) => !r.ok).length;
+  if (failedFeeds > 0) {
+    console.warn(`[WARN] ${failedFeeds} of ${results.length} feeds failed; syncing the ${merged.size} entries that were fetched`);
+  }
 
-  const cf = await syncCloudflare(cfg, merged);
+  const cf = await syncCloudflare(cfg, merged, fetchImpl);
   if (cf === null) return 1;
-  const cdnOk = await syncCdnMirrors(cfg, cf.refSet);
-  if (cf.ok && cdnOk) {
-    console.log('[DONE] sync done: Cloudflare list + both CDNs in sync');
+  const cdnOk = await syncCdnMirrors(cfg, cf.refSet, fetchImpl);
+  if (cf.ok && cdnOk && failedFeeds === 0) {
+    const targets = ['Cloudflare list', cfg.cdnfly && 'cdnfly', cfg.goedge && 'goedge'].filter(Boolean);
+    console.log(`[DONE] sync done: ${targets.join(' + ')} in sync`);
     return 0;
   }
+  console.error('[ERROR] sync incomplete: a feed, the Cloudflare write or a CDN mirror failed (see above); exit 1');
   return 1;
 }

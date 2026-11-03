@@ -9,6 +9,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // This module lives in src/; .env sits at the project root.
 export const ENV_FILE = join(HERE, '..', '.env');
 const REQUIRED_KEYS = ['CF_AUTH_TOKEN', 'CF_ACCOUNT_ID', 'CF_LIST_ID', 'URL_IPV4', 'URL_IPV6'];
+// Keys an enabled CDN section needs; checked only when its *_BASE_URL is set.
+const CDNFLY_KEYS = ['CDNFLY_API_KEY', 'CDNFLY_API_SECRET'];
+const GOEDGE_KEYS = ['GOEDGE_USERNAME', 'GOEDGE_PASSWORD', 'GOEDGE_V4_LIST_ID', 'GOEDGE_V6_LIST_ID'];
 
 /**
  * @typedef {{baseUrl: string, apiKey: string, apiSecret: string, wafConfigId: string}} CdnflyCfg
@@ -43,7 +46,11 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
     throw new Error(`cannot read ${envFile}: ${e.message}`);
   }
   for (const [k, v] of Object.entries(env)) if (v) values.set(k, v);
-  const missing = REQUIRED_KEYS.filter((k) => !values.get(k));
+  const missing = [
+    ...REQUIRED_KEYS,
+    ...(values.get('CDNFLY_BASE_URL') ? CDNFLY_KEYS : []),
+    ...(values.get('GOEDGE_BASE_URL') ? GOEDGE_KEYS : []),
+  ].filter((k) => !values.get(k));
   if (missing.length > 0) {
     throw new Error(`missing config in ${envFile}: ${missing.join(', ')}`);
   }
@@ -52,7 +59,7 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
         baseUrl: /** @type {string} */ (values.get('CDNFLY_BASE_URL')),
         apiKey: values.get('CDNFLY_API_KEY') ?? '',
         apiSecret: values.get('CDNFLY_API_SECRET') ?? '',
-        wafConfigId: values.get('CDNFLY_WAF_CONFIG_ID') ?? 'global-0-openresty_config-openresty-config',
+        wafConfigId: values.get('CDNFLY_WAF_CONFIG_ID') || 'global-0-openresty_config-openresty-config',
       }
     : null;
   const goedge = values.get('GOEDGE_BASE_URL')

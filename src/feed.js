@@ -4,11 +4,13 @@ import { parseEntry } from './ip.js';
 import { FETCH_TIMEOUT_MS, timedOut } from './http.js';
 
 /**
- * @typedef {{entries: Set<string>, rejected: number}} FeedResult
+ * @typedef {{entries: Set<string>, rejected: number, ok: boolean}} FeedResult
  */
 
 /**
  * Fetch one feed; returns its entries, normalized and deduplicated.
+ * ok is false when the fetch failed or the feed yielded no valid entry, so
+ * the caller can report the run as failed instead of silently syncing less.
  * @param {string} url
  * @param {typeof fetch} fetchImpl
  * @returns {Promise<FeedResult>}
@@ -24,7 +26,7 @@ export async function fetchFeed(url, fetchImpl = fetch) {
     });
     if (!res.ok) {
       console.error(`[ERROR] feed fetch failed (${host}): HTTP ${res.status}`);
-      return { entries, rejected };
+      return { entries, rejected, ok: false };
     }
     const content = await res.text();
     for (const line of content.split(/\r?\n/)) {
@@ -36,11 +38,16 @@ export async function fetchFeed(url, fetchImpl = fetch) {
         entries.add(entry);
       }
     }
+    if (entries.size === 0) {
+      console.error(`[ERROR] feed ${host} returned no valid entries (${rejected} unparseable lines)`);
+      return { entries, rejected, ok: false };
+    }
     console.log(`[INFO] ${host}: ${entries.size} unique entries (${rejected} unparseable lines discarded)`);
+    return { entries, rejected, ok: true };
   } catch (e) {
     console.error(`[ERROR] feed fetch failed (${host}): ${timedOut(e) ? 'timeout' : e.message}`);
+    return { entries, rejected, ok: false };
   }
-  return { entries, rejected };
 }
 
 /**

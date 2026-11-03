@@ -9,7 +9,7 @@ import { fetchFeed, mergeFeeds } from './src/feed.js';
 import { computeToAdd } from './src/diff.js';
 import { fetchCfItems, addItemsToCf } from './src/cloudflare.js';
 import { loadConfig, ENV_FILE } from './src/config.js';
-import { syncCloudflare, syncCdnMirrors } from './src/main.js';
+import { syncCloudflare, syncCdnMirrors, main } from './src/main.js';
 
 const V6_EXPANDED = '2001:0db8:0000:0000:0000:0000:0000:0001';
 const V6_COMPRESSED = '2001:db8::1';
@@ -146,6 +146,17 @@ test('fetchCfItems: follows cursor pagination and normalizes items', async () =>
   assert.deepEqual(out.set, new Set(['1.1.1.1', V6_COMPRESSED, '9.9.9.9', 'weird-entry']));
 });
 
+test('fetchCfItems: pagination that never ends -> null, not a truncated set', async () => {
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const fetchImpl = async () => fakeResponse({ success: true, result: [{ ip: '1.1.1.1' }], result_info: { cursors: { after: 'MORE' } } });
+    assert.equal(await fetchCfItems(CFG, fetchImpl), null);
+  } finally {
+    console.error = orig;
+  }
+});
+
 test('fetchCfItems: API failure -> null (sync must abort, not re-add everything)', async () => {
   const fetchImpl = async () => ({ ok: false, status: 403, json: async () => ({ success: false, errors: [{ code: 9109, message: 'unauthorized' }] }) });
   assert.equal(await fetchCfItems(CFG, fetchImpl), null);
@@ -190,6 +201,28 @@ test('loadConfig: OS env overrides file; CDN sections optional (null)', () => {
     assert.equal(cfg.feedUrls.length, 2);
     assert.equal(cfg.cdnfly, null);
     assert.equal(cfg.goedge, null);
+  } finally {
+    rmSync(f);
+  }
+});
+
+test('loadConfig: an enabled CDN with missing keys throws listing them', () => {
+  const f = join(tmpdir(), 'cf-sync-test-cdn.env');
+  writeFileSync(f, ['CF_AUTH_TOKEN=t', 'CF_ACCOUNT_ID=a', 'CF_LIST_ID=l', 'URL_IPV4=https://x/v4', 'URL_IPV6=https://x/v6',
+    'GOEDGE_BASE_URL=http://edge.example', 'GOEDGE_USERNAME=u', 'GOEDGE_PASSWORD=p', 'GOEDGE_V4_LIST_ID=4'].join('\n') + '\n');
+  try {
+    assert.throws(() => loadConfig(f, {}), /missing config .*: GOEDGE_V6_LIST_ID$/);
+  } finally {
+    rmSync(f);
+  }
+});
+
+test('loadConfig: an empty CDNFLY_WAF_CONFIG_ID falls back to the default id', () => {
+  const f = join(tmpdir(), 'cf-sync-test-waf.env');
+  writeFileSync(f, ['CF_AUTH_TOKEN=t', 'CF_ACCOUNT_ID=a', 'CF_LIST_ID=l', 'URL_IPV4=https://x/v4', 'URL_IPV6=https://x/v6',
+    'CDNFLY_BASE_URL=http://cdn.example', 'CDNFLY_API_KEY=k', 'CDNFLY_API_SECRET=s', 'CDNFLY_WAF_CONFIG_ID='].join('\n') + '\n');
+  try {
+    assert.equal(loadConfig(f, {}).cdnfly.wafConfigId, 'global-0-openresty_config-openresty-config');
   } finally {
     rmSync(f);
   }
@@ -247,9 +280,10 @@ test('fetchFeed: normalizes, dedupes, and sends UA + a timeout signal', async ()
     seen = { url, opts };
     return textResponse(body);
   };
-  const { entries, rejected } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+  const { entries, rejected, ok } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
   assert.deepEqual(entries, new Set(['1.2.3.4', '10.0.0.0/8', V6_COMPRESSED]));
   assert.equal(rejected, 0);
+  assert.equal(ok, true);
   assert.equal(seen.url, 'https://feeds.example/v4.txt');
   assert.equal(seen.opts.headers['User-Agent'], 'cf-blocklist-sync/1.0');
   assert.ok(seen.opts.signal instanceof AbortSignal);
@@ -268,9 +302,10 @@ test('fetchFeed: HTTP error -> empty set, no throw', async () => {
   console.error = (msg) => errs.push(String(msg));
   try {
     const fetchImpl = async () => textResponse('nope', { ok: false, status: 503 });
-    const { entries, rejected } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
+    const { entries, rejected, ok } = await fetchFeed('https://feeds.example/v4.txt', fetchImpl);
     assert.deepEqual(entries, new Set());
     assert.equal(rejected, 0);
+    assert.equal(ok, false);
   } finally {
     console.error = orig;
   }
@@ -294,6 +329,17 @@ test('fetchFeed: timeout -> empty set with a "timeout" log', async () => {
     console.error = orig;
   }
   assert.match(errs[0], /\[ERROR\] feed fetch failed \(feeds\.example\): timeout$/);
+});
+
+test('fetchFeed: HTTP 200 with no valid entry -> ok:false', async () => {
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const out = await fetchFeed('https://feeds.example/v4.txt', async () => textResponse('<html>maintenance</html>\n'));
+    assert.deepEqual(out, { entries: new Set(), rejected: 1, ok: false });
+  } finally {
+    console.error = orig;
+  }
 });
 
 test('fetchFeed: an unparseable feed URL throws instead of being swallowed', async () => {
@@ -386,4 +432,49 @@ test('syncCdnMirrors: one failing mirror -> false', async () => {
   };
   const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({ code: 500 }) });
   assert.equal(await syncCdnMirrors(cfg, new Set(['1.2.3.4']), fetchImpl), false);
+});
+
+// main() end to end with stubbed network: feeds on feeds.example, Cloudflare on api.cloudflare.com.
+function mainFetch({ v6Status = 200 } = {}) {
+  const posts = [];
+  const fetchImpl = async (url, opts = {}) => {
+    if (url.endsWith('/v4.txt')) return textResponse('1.1.1.1\n2.2.2.2\n');
+    if (url.endsWith('/v6.txt')) return textResponse('2001:db8::1\n', { ok: v6Status === 200, status: v6Status });
+    if (opts.method === 'POST') {
+      posts.push(JSON.parse(opts.body));
+      return fakeResponse({ success: true, result: { operation_id: 'op' } });
+    }
+    return fakeResponse({ success: true, result: [{ ip: '1.1.1.1' }], result_info: {} });
+  };
+  return { fetchImpl, posts };
+}
+const MAIN_CFG = { ...CFG, feedUrls: ['https://feeds.example/v4.txt', 'https://feeds.example/v6.txt'], cdnfly: null, goedge: null };
+
+async function quiet(fn) {
+  const logs = [];
+  const saved = [console.log, console.warn, console.error];
+  console.log = console.warn = console.error = (msg) => logs.push(String(msg));
+  try {
+    return { code: await fn(), logs };
+  } finally {
+    [console.log, console.warn, console.error] = saved;
+  }
+}
+
+test('main: all feeds and Cloudflare ok, CDNs disabled -> 0, DONE names only Cloudflare', async () => {
+  const { fetchImpl, posts } = mainFetch();
+  const { code, logs } = await quiet(() => main(MAIN_CFG, fetchImpl));
+  assert.equal(code, 0);
+  assert.deepEqual(posts, [[{ ip: '2.2.2.2' }, { ip: '2001:db8::1' }]]);
+  assert.ok(logs.includes('[DONE] sync done: Cloudflare list in sync'));
+});
+
+test('main: one feed failing -> fetched entries still synced, but exit 1', async () => {
+  const { fetchImpl, posts } = mainFetch({ v6Status: 503 });
+  const { code, logs } = await quiet(() => main(MAIN_CFG, fetchImpl));
+  assert.equal(code, 1);
+  assert.deepEqual(posts, [[{ ip: '2.2.2.2' }]]);
+  assert.ok(logs.some((l) => l.startsWith('[WARN] 1 of 2 feeds failed')));
+  assert.ok(!logs.some((l) => l.startsWith('[DONE]')));
+  assert.ok(logs.some((l) => l.startsWith('[ERROR] sync incomplete')));
 });
