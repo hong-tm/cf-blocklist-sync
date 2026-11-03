@@ -65,6 +65,11 @@ export async function fetchCfItems(cfg, fetchImpl = fetch) {
       cursor = data.result_info && data.result_info.cursors && data.result_info.cursors.after;
       if (!cursor) break;
     }
+    if (cursor) {
+      // A truncated read would make the diff re-add items that are already listed.
+      console.error(`[ERROR] Cloudflare list read: still paginating after ${CF_MAX_PAGES} pages; aborting`);
+      return null;
+    }
     console.log(`[INFO] Cloudflare list: ${total} items (${set.size} after normalization)`);
     return { set, total };
   } catch (e) {

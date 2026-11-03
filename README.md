@@ -94,7 +94,7 @@ node run_sync.js
 npm run sync
 ```
 
-Exit code `0` means success (including the "nothing to add" case); exit code `1` means at least one failure. The sync is add-only: re-running it is safe and idempotent — a second consecutive run adds 0 entries.
+Exit code `0` means success (including the "nothing to add" case); exit code `1` means at least one failure — including a feed that failed or returned no valid entries (the entries from the other feed are still synced). The sync is add-only: re-running it is safe and idempotent — a second consecutive run adds 0 entries.
 
 ## Deploy
 
@@ -122,4 +122,4 @@ Runs every `test_*.js` file with Node's built-in `node:test` runner (3 files tod
 - **GoEdge**: entries are imported in batches of 500; if a batch fails, the list is re-exported and re-diffed so only the truly missing entries are retried. New entries are stamped with a one-year `expiredAt` (unix seconds) instead of the panel's permanent default; existing entries are left untouched.
 - **Timeouts**: every outbound request uses per-request timeouts via `AbortSignal.timeout` (30 s for reads, 60 s for writes), defined once in `src/http.js`. The timeout applies per request, not to a whole paginated read.
 - **Failure handling**: each IO function catches its own errors and returns a sentinel (`null`/`false`, or `{ok:false}` from the GoEdge sync) so one failing system degrades to a non-zero exit instead of aborting the process. A timeout on the GoEdge mirror therefore still leaves the Cloudflare and cdnfly results written; the next daily run recomputes the diff.
-- **Config**: loaded from `.env` at the project root with OS environment override; a missing required key aborts the run with exit 1.
+- **Config**: loaded from `.env` at the project root with OS environment override; a missing required key aborts the run with exit 1. A CDN enabled by its `*_BASE_URL` also requires its companion keys (cdnfly: API key + secret; GoEdge: username, password and both list IDs).
