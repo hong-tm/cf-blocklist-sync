@@ -40,7 +40,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | Change cdnfly behavior | `src/cdn_cdnfly.js` | Value is a JSON string with `custom_black` field |
 | Change GoEdge behavior | `src/cdn_goedge.js` | Session + CSRF; see file header for live-verified API notes |
 | Config keys / enable a CDN | `src/config.js` → `loadConfig`, `.env.example` | CDN enabled only when its `*_BASE_URL` is set |
-| Scheduling / retry | `ecosystem.config.cjs` | pm2 one-shot: `cron_restart` daily 12:00, `stop_exit_codes: [0]`, failing runs retry every 5 min up to `max_restarts` 3, then wait for the next cron tick. A systemd timer variant (`cf-blocklist-sync.timer`) exists on the host but is disabled |
+| Scheduling / retry | `run_sync.js` (budget) + `ecosystem.config.cjs` (pm2) | pm2 one-shot: `cron_restart` daily 12:00, `autorestart: false`. run_sync.js retries a failed run up to 3 attempts, 5 min apart (delay override: `SYNC_RETRY_DELAY_MS`), whatever the run duration. A systemd timer variant (`cf-blocklist-sync.timer`) exists on the host but is disabled |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -102,7 +102,7 @@ Exit-code contract: `0` = success (including "nothing to add"); `1` = at least o
 ## NOTES
 - CODE MAP omits line numbers deliberately — they rot on every edit; grep the symbol name instead.
 - `tsconfig.json` checks root `*.js`/`*.cjs` plus `src/**/*.js`, and deliberately excludes `test_*.js`. A new source directory must be added to `include` or it is silently not typechecked.
-- Production runs as a pm2 one-shot app (this host also runs searxng and tgv-monitor under pm2): a clean exit stops until the next cron tick; a failed run retries every 5 min, at most 3 times (min_uptime counts them unstable), then waits for the next cron tick; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`). The systemd units stay on the host as a disabled alternative — do NOT run both at once or the sync fires twice a day.
+- Production runs as a pm2 one-shot app (this host also runs searxng and tgv-monitor under pm2): `autorestart: false`, `cron_restart` daily 12:00. The bounded retry (3 attempts, 5 min apart, duration-independent) lives in `run_sync.js`, so the behavior is identical under the disabled systemd alternative; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`). Do NOT run both schedulers at once or the sync fires twice a day.
 - The cdnfly and GoEdge mirrors are enabled only when `CDNFLY_BASE_URL` / `GOEDGE_BASE_URL` is set; otherwise the step is skipped with an `[INFO]` log.
 - Cloudflare list capacity is 10,000 (`MAX_ITEMS`); exceeding it only logs a `[WARN]` and continues.
 - `.env` is read from the project root; OS environment variables override file values. `src/config.js` derives that path from its own location (`../.env`), so moving it without adjusting `ENV_FILE` aims config at `src/.env` — production fails while the other `loadConfig` tests (which all pass explicit paths) stay green. Only the `ENV_FILE` test guards it.

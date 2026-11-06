@@ -7,15 +7,11 @@ module.exports = {
       script: 'run_sync.js',
       cwd: __dirname,
       cron_restart: '0 12 * * *', // daily at 12:00 local time (Asia/Kuala_Lumpur)
-      // One-shot app: a clean exit(0) must stop (wait for next cron tick),
-      // while a failed run (non-zero exit) retries after restart_delay.
-      // A failing run lasts well under min_uptime, so pm2 counts every retry
-      // as unstable and stops after max_restarts (no infinite 3-second loop);
-      // the next cron tick starts a fresh cycle.
-      stop_exit_codes: [0],
-      min_uptime: '1m',
-      max_restarts: 3,
-      restart_delay: 300000,
+      // One-shot: run at the cron tick, exit, stay down until the next tick.
+      // Never let pm2 auto-restart: the retry budget lives in run_sync.js,
+      // which counts every failed run (a supervisor's min_uptime heuristic
+      // would only bound fast crashes, not runs that fail after minutes).
+      autorestart: false,
       merge_logs: true,
       time: true,
       out_file: '/var/log/cf_sync.log',
