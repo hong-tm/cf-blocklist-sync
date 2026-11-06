@@ -1,4 +1,6 @@
-// pm2 process definition for the daily blocklist sync.
+// ALTERNATIVE pm2 process definition for hosts that prefer pm2.
+// The production host schedules the sync with systemd instead:
+// cf-blocklist-sync.timer -> cf-blocklist-sync.service (see README, Deploy).
 module.exports = {
   apps: [
     {
