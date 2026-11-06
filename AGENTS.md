@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 Node.js >= 20 ESM batch CLI (`type: module`, no build step — plain JS + JSDoc types, `tsc --noEmit` only).
-Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that reference set add-only into a cdnfly-class WAF panel and GoEdge/EdgeAdmin IP lists; a systemd timer (cf-blocklist-sync.timer) runs it daily 12:00 Asia/Kuala_Lumpur.
+Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that reference set add-only into a cdnfly-class WAF panel and GoEdge/EdgeAdmin IP lists; a pm2 cron app (cf-blocklist-sync, alongside searxng and tgv-monitor) runs it daily 12:00 Asia/Kuala_Lumpur.
 
 ## STRUCTURE
 ```
@@ -23,7 +23,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 ├── test_sync_blocklist.js # node:test; injected fetchImpl stubs
 ├── test_cdn_cdnfly.js     # node:test; injected fetchImpl stubs
 ├── test_cdn_goedge.js     # node:test; injected fetchImpl + clock (nowMs) stubs
-├── ecosystem.config.cjs   # ALTERNATIVE pm2 app def; production schedules via a systemd timer
+├── ecosystem.config.cjs   # pm2 app def — the production scheduler (one-shot, cron_restart, bounded retry)
 ├── tsconfig.json          # strict checkJs config driving `npm run typecheck`
 ├── package.json           # scripts (sync/test/typecheck) + ipaddr.js dep
 ├── .env.example           # tracked config template; real .env is gitignored
@@ -40,7 +40,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | Change cdnfly behavior | `src/cdn_cdnfly.js` | Value is a JSON string with `custom_black` field |
 | Change GoEdge behavior | `src/cdn_goedge.js` | Session + CSRF; see file header for live-verified API notes |
 | Config keys / enable a CDN | `src/config.js` → `loadConfig`, `.env.example` | CDN enabled only when its `*_BASE_URL` is set |
-| Scheduling / retry | systemd units on the host (`/etc/systemd/system/cf-blocklist-sync.{service,timer}`) | oneshot; `Restart=on-failure`, `RestartSec=5min`, 3 tries/hour; timer fires 12:00 Asia/Kuala_Lumpur |
+| Scheduling / retry | `run_sync.js` (budget) + `ecosystem.config.cjs` (pm2) | pm2 one-shot: `cron_restart` daily 12:00, `autorestart: false`. run_sync.js retries a failed run up to 3 attempts, 5 min apart (delay override: `SYNC_RETRY_DELAY_MS`), whatever the run duration. A systemd timer variant (`cf-blocklist-sync.timer`) exists on the host but is disabled |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -95,14 +95,14 @@ npm install                 # deps (ipaddr.js)
 npm run sync                # or: node run_sync.js — one-shot sync; writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync
 npm test                    # node --test "test_*.js"
 npm run typecheck           # tsc --noEmit (strict checkJs over *.js/*.cjs)
-systemctl enable --now cf-blocklist-sync.timer  # enable the daily run (units live in /etc/systemd/system on the host)
+pm2 start ecosystem.config.cjs && pm2 save   # enable the daily run (systemd timer variant: keep it disabled)
 ```
 Exit-code contract: `0` = success (including "nothing to add"); `1` = at least one failure.
 
 ## NOTES
 - CODE MAP omits line numbers deliberately — they rot on every edit; grep the symbol name instead.
 - `tsconfig.json` checks root `*.js`/`*.cjs` plus `src/**/*.js`, and deliberately excludes `test_*.js`. A new source directory must be added to `include` or it is silently not typechecked.
-- Production runs via a systemd oneshot service: `Restart=on-failure`, `RestartSec=5min`, 3 tries within 1 hour, then it waits for the next timer tick; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`). `ecosystem.config.cjs` is a pm2 alternative, unused on this host.
+- Production runs as a pm2 one-shot app (this host also runs searxng and tgv-monitor under pm2): `autorestart: false`, `cron_restart` daily 12:00. The bounded retry (3 attempts, 5 min apart, duration-independent) lives in `run_sync.js`, so the behavior is identical under the disabled systemd alternative; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`). Do NOT run both schedulers at once or the sync fires twice a day.
 - The cdnfly and GoEdge mirrors are enabled only when `CDNFLY_BASE_URL` / `GOEDGE_BASE_URL` is set; otherwise the step is skipped with an `[INFO]` log.
 - Cloudflare list capacity is 10,000 (`MAX_ITEMS`); exceeding it only logs a `[WARN]` and continues.
 - `.env` is read from the project root; OS environment variables override file values. `src/config.js` derives that path from its own location (`../.env`), so moving it without adjusting `ENV_FILE` aims config at `src/.env` — production fails while the other `loadConfig` tests (which all pass explicit paths) stay green. Only the `ENV_FILE` test guards it.
@@ -122,5 +122,5 @@ Checks for this repo: the `npm test` and `npm run typecheck` entries in the COMM
 
 Hard invariants:
 
-- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. On the production host a systemd timer runs this same checkout — the checkout IS the deployed code.
+- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. On the production host pm2 runs this same checkout — the checkout IS the deployed code.
 - `test_cdn_cdnfly.js` and `test_cdn_goedge.js` are unit tests: they use injected `fetchImpl` stubs and fake hosts (`http://cdn.example`, `http://edge.example`), run as part of `npm test`, and are safe to run locally.

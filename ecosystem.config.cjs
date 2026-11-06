@@ -1,6 +1,5 @@
-// ALTERNATIVE pm2 process definition for hosts that prefer pm2.
-// The production host schedules the sync with systemd instead:
-// cf-blocklist-sync.timer -> cf-blocklist-sync.service (see README, Deploy).
+// pm2 process definition for the daily blocklist sync (the production
+// scheduler on this host). A systemd timer variant also exists there, disabled.
 module.exports = {
   apps: [
     {
@@ -8,11 +7,11 @@ module.exports = {
       script: 'run_sync.js',
       cwd: __dirname,
       cron_restart: '0 12 * * *', // daily at 12:00 local time (Asia/Kuala_Lumpur)
-      // One-shot app: a clean exit(0) must stop (wait for next cron tick),
-      // while a failed run (non-zero exit) retries after restart_delay.
-      stop_exit_codes: [0],
-      min_uptime: 0,
-      restart_delay: 3000,
+      // One-shot: run at the cron tick, exit, stay down until the next tick.
+      // Never let pm2 auto-restart: the retry budget lives in run_sync.js,
+      // which counts every failed run (a supervisor's min_uptime heuristic
+      // would only bound fast crashes, not runs that fail after minutes).
+      autorestart: false,
       merge_logs: true,
       time: true,
       out_file: '/var/log/cf_sync.log',
