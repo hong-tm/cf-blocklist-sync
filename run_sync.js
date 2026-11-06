@@ -13,6 +13,7 @@ import { main } from './src/main.js';
 const ATTEMPTS = 3;
 const RETRY_DELAY_MS = Number(process.env.SYNC_RETRY_DELAY_MS) || 5 * 60_000;
 
+/** @param {number} ms */
 const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 let code = 1;
