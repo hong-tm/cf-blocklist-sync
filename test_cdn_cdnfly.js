@@ -150,3 +150,9 @@ test('fetchCdnflyWafConfig: TimeoutError maps to "timeout" log line', async () =
   assert.equal(errs.length, 1);
   assert.match(errs[0], /\[ERROR\] cdnfly config read: timeout$/);
 });
+
+test('appendToCdnflyBlack: an empty field gets no leading blank line', () => {
+  const value = { custom_black: ' \n' };
+  assert.equal(appendToCdnflyBlack(value, ['1.1.1.1', '2.2.2.2']), 2);
+  assert.equal(value.custom_black, '1.1.1.1\n2.2.2.2');
+});

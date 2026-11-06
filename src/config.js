@@ -40,7 +40,7 @@ export function loadConfig(envFile = ENV_FILE, env = process.env) {
       const t = line.trim();
       if (!t || t.startsWith('#') || !t.includes('=')) continue;
       const i = t.indexOf('=');
-      values.set(t.slice(0, i).trim(), t.slice(i + 1).trim().replace(/^['"]|['"]$/g, ''));
+      values.set(t.slice(0, i).trim(), t.slice(i + 1).trim().replace(/^(['"])(.*)\1$/, '$2'));
     }
   } catch (e) {
     throw new Error(`cannot read ${envFile}: ${e.message}`);

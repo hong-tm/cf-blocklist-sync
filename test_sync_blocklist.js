@@ -4,7 +4,7 @@ import { writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseEntry, normalizeCfItem } from './src/ip.js';
+import { parseEntry, normalizeCfItem, isPrivateOrLocal } from './src/ip.js';
 import { fetchFeed, mergeFeeds } from './src/feed.js';
 import { computeToAdd } from './src/diff.js';
 import { fetchCfItems, addItemsToCf } from './src/cloudflare.js';
@@ -13,6 +13,7 @@ import { syncCloudflare, syncCdnMirrors, main } from './src/main.js';
 
 const V6_EXPANDED = '2001:0db8:0000:0000:0000:0000:0000:0001';
 const V6_COMPRESSED = '2001:db8::1';
+const OP_COMPLETED = () => fakeResponse({ success: true, result: { id: 'op', status: 'completed' } });
 
 test('parseEntry: bare v4 stays canonical', () => {
   assert.equal(parseEntry('1.2.3.4'), '1.2.3.4');
@@ -165,7 +166,8 @@ test('fetchCfItems: API failure -> null (sync must abort, not re-add everything)
 test('addItemsToCf: batches items in bare-array POST bodies', async () => {
   const items = Array.from({ length: 1200 }, (_, i) => `10.0.${Math.floor(i / 256)}.${(i % 256) + 1}`);
   const calls = [];
-  const fetchImpl = async (_url, opts) => {
+  const fetchImpl = async (url, opts) => {
+    if (url.includes('/bulk_operations/')) return OP_COMPLETED();
     calls.push(opts);
     return fakeResponse({ success: true, result: { operation_id: 'op' } });
   };
@@ -348,7 +350,8 @@ test('fetchFeed: an unparseable feed URL throws instead of being swallowed', asy
 
 test('syncCloudflare: posts only the missing items and returns the widened refSet', async () => {
   const posts = [];
-  const fetchImpl = async (_url, opts) => {
+  const fetchImpl = async (url, opts) => {
+    if (url.includes('/bulk_operations/')) return OP_COMPLETED();
     if (opts.method === 'POST') {
       posts.push(JSON.parse(opts.body));
       return fakeResponse({ success: true, result: { operation_id: 'op' } });
@@ -392,7 +395,8 @@ test('syncCloudflare: warns when the list would exceed MAX_ITEMS', async () => {
   console.warn = (msg) => warns.push(String(msg));
   try {
     const full = Array.from({ length: 10_000 }, () => ({ ip: '1.1.1.1' }));
-    const fetchImpl = async (_url, opts) => {
+    const fetchImpl = async (url, opts) => {
+      if (url.includes('/bulk_operations/')) return OP_COMPLETED();
       if (opts.method === 'POST') return fakeResponse({ success: true, result: { operation_id: 'op' } });
       return fakeResponse({ success: true, result: full, result_info: {} });
     };
@@ -440,6 +444,7 @@ function mainFetch({ v6Status = 200 } = {}) {
   const fetchImpl = async (url, opts = {}) => {
     if (url.endsWith('/v4.txt')) return textResponse('1.1.1.1\n2.2.2.2\n');
     if (url.endsWith('/v6.txt')) return textResponse('2001:db8::1\n', { ok: v6Status === 200, status: v6Status });
+    if (url.includes('/bulk_operations/')) return OP_COMPLETED();
     if (opts.method === 'POST') {
       posts.push(JSON.parse(opts.body));
       return fakeResponse({ success: true, result: { operation_id: 'op' } });
@@ -477,4 +482,165 @@ test('main: one feed failing -> fetched entries still synced, but exit 1', async
   assert.ok(logs.some((l) => l.startsWith('[WARN] 1 of 2 feeds failed')));
   assert.ok(!logs.some((l) => l.startsWith('[DONE]')));
   assert.ok(logs.some((l) => l.startsWith('[ERROR] sync incomplete')));
+});
+
+test('parseEntry: numeric shorthand, hex and octal are garbage, not IPs', () => {
+  for (const raw of ['404', '2024', '1.2.3', '0x7f.0.0.1', '0300.0250.0.1', '3232235777', '01.2.3.4', '1.2.3/24']) {
+    assert.equal(parseEntry(raw), null, raw);
+  }
+});
+
+test('parseEntry: zone IDs and prefixes outside the Cloudflare limits are rejected', () => {
+  for (const raw of ['fe80::1%eth0', 'fe80::1%eth0/64', '0.0.0.0/0', '1.0.0.0/7', '::/0', '2000::/11', '1.2.3.4/33', '::/129', '1.2.3.4/x']) {
+    assert.equal(parseEntry(raw), null, raw);
+  }
+  assert.equal(parseEntry('1.0.0.0/8'), '1.0.0.0/8');
+  assert.equal(parseEntry('2000::/12'), '2000::/12');
+});
+
+test('parseEntry: notation variants collapse to one canonical form', () => {
+  assert.equal(parseEntry('1.2.3.4/24'), '1.2.3.0/24');
+  assert.equal(parseEntry('2001:db8::1/64'), '2001:db8::/64');
+  assert.equal(parseEntry('1.2.3.4/32'), '1.2.3.4');
+  assert.equal(parseEntry('2001:db8::1/128'), '2001:db8::1');
+  assert.equal(parseEntry('::ffff:1.2.3.4'), '1.2.3.4');
+  assert.equal(parseEntry('::ffff:1.2.3.4/120'), null);
+});
+
+test('loadConfig: strips only a matched pair of quotes', () => {
+  const dir = join(tmpdir(), `cf-quotes-${process.pid}.env`);
+  writeFileSync(dir, 'CF_AUTH_TOKEN="tok"\nCF_ACCOUNT_ID=acc"\nCF_LIST_ID=\'lst"\nURL_IPV4=\'https://a/4\'\nURL_IPV6=https://a/6\n');
+  try {
+    const cfg = loadConfig(dir, {});
+    assert.equal(cfg.cfAuthToken, 'tok');
+    assert.equal(cfg.cfAccountId, 'acc"');
+    assert.equal(cfg.cfListId, '\'lst"');
+    assert.deepEqual(cfg.feedUrls, ['https://a/4', 'https://a/6']);
+  } finally {
+    rmSync(dir);
+  }
+});
+
+/** Replays status replies; every POST queues one operation. */
+function opFetch(statuses, order = []) {
+  const queue = [...statuses];
+  return async (url, opts = {}) => {
+    if (url.includes('/bulk_operations/')) {
+      order.push('poll');
+      const next = queue.shift();
+      return next instanceof Error ? Promise.reject(next) : fakeResponse({ success: true, result: { status: next, error: 'list full' } });
+    }
+    order.push('post');
+    return fakeResponse({ success: true, result: { operation_id: 'op' } });
+  };
+}
+
+test('addItemsToCf: the next batch waits until the previous operation completed', async () => {
+  const items = Array.from({ length: 501 }, (_, i) => `10.0.${Math.floor(i / 256)}.${(i % 256) + 1}`);
+  const order = [];
+  const slept = [];
+  const sleep = async (ms) => { slept.push(ms); };
+  const ok = await addItemsToCf(CFG, items, opFetch(['pending', 'running', 'completed', 'completed'], order), sleep);
+  assert.equal(ok, true);
+  assert.deepEqual(order, ['post', 'poll', 'poll', 'poll', 'post', 'poll']);
+  assert.deepEqual(slept, [1000, 1000]);
+});
+
+test('addItemsToCf: a failed operation -> false, later batches not sent', async () => {
+  const items = Array.from({ length: 501 }, (_, i) => `10.0.${Math.floor(i / 256)}.${(i % 256) + 1}`);
+  const order = [];
+  const { code, logs } = await quiet(async () => addItemsToCf(CFG, items, opFetch(['failed'], order), async () => {}));
+  assert.equal(code, false);
+  assert.deepEqual(order, ['post', 'poll']);
+  assert.ok(logs.some((l) => l.includes('list full')));
+});
+
+test('addItemsToCf: an operation that never finishes -> false after the poll limit', async () => {
+  const fetchImpl = opFetch(Array(500).fill('pending'));
+  let sleeps = 0;
+  const { code } = await quiet(() => addItemsToCf(CFG, ['1.1.1.1'], fetchImpl, async () => { sleeps += 1; }));
+  assert.equal(code, false);
+  assert.equal(sleeps, 119);
+});
+
+test('addItemsToCf: a status read that throws -> false, no escape', async () => {
+  const { code } = await quiet(() => addItemsToCf(CFG, ['1.1.1.1'], opFetch([new Error('reset')]), async () => {}));
+  assert.equal(code, false);
+});
+
+test('syncCdnMirrors: raw or out-of-range Cloudflare items never reach a WAF', async () => {
+  let putValue;
+  const fetchImpl = async (_url, opts = {}) => {
+    if (opts.method === 'PUT') {
+      putValue = JSON.parse(JSON.parse(opts.body).value);
+      return fakeResponse({ code: 0 });
+    }
+    return fakeResponse({ code: 0, data: { value: JSON.stringify({ custom_black: '' }) } });
+  };
+  const cfg = { ...CFG, cdnfly: { baseUrl: 'http://cdn.example', apiKey: 'k', apiSecret: 's', wafConfigId: 'w' }, goedge: null };
+  const { code, logs } = await quiet(() => syncCdnMirrors(cfg, new Set(['1.1.1.1', '0.0.0.0/0', 'garbage']), fetchImpl));
+  assert.equal(code, true);
+  assert.equal(putValue.custom_black, '1.1.1.1');
+  assert.ok(logs.some((l) => l.startsWith('[WARN] 2 Cloudflare items')));
+});
+
+test('syncCdnMirrors: a slow panel does not hold up the other, and both results count', async () => {
+  let releaseCdnfly;
+  const cdnflyBlocked = new Promise((resolve) => { releaseCdnfly = resolve; });
+  const fetchImpl = async (url) => {
+    if (url.startsWith('http://cdn.example')) {
+      await cdnflyBlocked;
+      return fakeResponse({ code: 1 });
+    }
+    releaseCdnfly(); // reached only if GoEdge starts while cdnfly is still waiting
+    return fakeResponse({ code: 500 });
+  };
+  const cfg = {
+    ...CFG,
+    cdnfly: { baseUrl: 'http://cdn.example', apiKey: 'k', apiSecret: 's', wafConfigId: 'w' },
+    goedge: { baseUrl: 'http://edge.example', username: 'u', password: 'p', v4ListId: '4', v6ListId: '5' },
+  };
+  const { code } = await quiet(() => syncCdnMirrors(cfg, new Set(['1.1.1.1']), fetchImpl));
+  assert.equal(code, false);
+});
+
+test('isPrivateOrLocal: private/local ranges true, public and documentation false', () => {
+  for (const e of ['10.0.0.1', '10.0.0.0/8', '192.168.1.0/24', '172.16.5.5', '127.0.0.1', '169.254.0.0/16', '100.64.0.1', '0.0.0.0']) assert.equal(isPrivateOrLocal(e), true, e);
+  assert.equal(isPrivateOrLocal('fd12:3456:789a::1'), true);
+  assert.equal(isPrivateOrLocal('fe80::1'), true);
+  for (const e of ['8.8.8.8', '1.2.3.0/24', '2001:db8::1', '2001:db8::/64']) assert.equal(isPrivateOrLocal(e), false, e);
+  assert.equal(isPrivateOrLocal('garbage-line'), false); // raw values are not the filter's business
+});
+
+test('main: private feed entries are dropped, never posted to Cloudflare', async () => {
+  const posts = [];
+  const fetchImpl = async (url, opts = {}) => {
+    if (url.includes('/bulk_operations/')) return OP_COMPLETED();
+    if (opts.method === 'POST') {
+      posts.push(JSON.parse(opts.body));
+      return fakeResponse({ success: true, result: { operation_id: 'op' } });
+    }
+    if (url.endsWith('/v4.txt')) return textResponse('8.8.4.4\n10.99.99.99\n192.168.0.0/16\n');
+    if (url.endsWith('/v6.txt')) return textResponse('2600::1\n');
+    return fakeResponse({ success: true, result: [], result_info: {} });
+  };
+  const { code, logs } = await quiet(() => main(MAIN_CFG, fetchImpl));
+  assert.equal(code, 0);
+  assert.deepEqual(posts, [[{ ip: '2600::1' }, { ip: '8.8.4.4' }]]); // computeToAdd sorts
+  assert.ok(logs.some((l) => l.startsWith('[WARN] dropped 2 private/local feed entries')));
+});
+
+test('syncCdnMirrors: private entries in the Cloudflare list are not mirrored', async () => {
+  let putValue;
+  const fetchImpl = async (_url, opts = {}) => {
+    if (opts.method === 'PUT') {
+      putValue = JSON.parse(JSON.parse(opts.body).value);
+      return fakeResponse({ code: 0 });
+    }
+    return fakeResponse({ code: 0, data: { value: JSON.stringify({ custom_black: '' }) } });
+  };
+  const cfg = { ...CFG, cdnfly: { baseUrl: 'http://cdn.example', apiKey: 'k', apiSecret: 's', wafConfigId: 'w' }, goedge: null };
+  const { logs } = await quiet(() => syncCdnMirrors(cfg, new Set(['9.9.9.9', '10.0.0.0/8', '127.0.0.1']), fetchImpl));
+  assert.equal(putValue.custom_black, '9.9.9.9');
+  assert.ok(logs.some((l) => l.startsWith('[WARN] 2 Cloudflare items')));
 });

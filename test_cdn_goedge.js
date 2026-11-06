@@ -268,3 +268,33 @@ test('goedge requests carry per-request AbortSignal timeouts', async () => {
   assert.equal(signals.length, 3); // csrf GET + login page GET + login POST (verified)
   assert.ok(signals.every((s) => s instanceof AbortSignal));
 });
+
+const EXPORT_CFG = { baseUrl: 'http://edge.example', username: 'u', password: 'p', v4ListId: '4', v6ListId: '5' };
+
+test('goedgeExportList: a body timeout -> null, no escape', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); } });
+  assert.equal(await goedgeExportList(EXPORT_CFG, { cookie: 'c=1' }, '4', fetchImpl), null);
+});
+
+test('goedgeExportList: a 200 login page or JSON error -> null, not an empty list', async () => {
+  for (const body of ['<!DOCTYPE html><html></html>', '\n<html>', '{"code":401}']) {
+    const fetchImpl = async () => ({ ok: true, status: 200, text: async () => body });
+    assert.equal(await goedgeExportList(EXPORT_CFG, { cookie: 'c=1' }, '4', fetchImpl), null, body);
+  }
+});
+
+test('goedgeExportList: an empty export is a valid empty list', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => '' });
+  assert.deepEqual(await goedgeExportList(EXPORT_CFG, { cookie: 'c=1' }, '4', fetchImpl), new Set());
+});
+
+test('goedgeExportList: expired entries count as absent (re-added next run), permanent and live kept', async () => {
+  const body = [
+    '9.9.9.9,0,ipv4,critical,',    // permanent (0 = never)
+    '8.8.8.8,999,ipv4,critical,',   // expired long before nowSec=1000
+    '7.7.7.7,2000000000,ipv4,critical,', // still live
+  ].join('\n');
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => body });
+  const s = await goedgeExportList(EXPORT_CFG, { cookie: 'c=1' }, '4', fetchImpl, 1_000_000);
+  assert.deepEqual(s, new Set(['9.9.9.9', '7.7.7.7']));
+});
