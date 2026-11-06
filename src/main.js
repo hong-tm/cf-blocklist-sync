@@ -6,6 +6,7 @@
 
 import { loadConfig } from './config.js';
 import { fetchFeed, mergeFeeds } from './feed.js';
+import { parseEntry, isPrivateOrLocal } from './ip.js';
 import { computeToAdd } from './diff.js';
 import { fetchCfItems, addItemsToCf, MAX_ITEMS } from './cloudflare.js';
 import { syncCdnfly } from './cdn_cdnfly.js';
@@ -55,20 +56,19 @@ export async function syncCloudflare(cfg, feedSet, fetchImpl = fetch) {
  * @returns {Promise<boolean>}
  */
 export async function syncCdnMirrors(cfg, refSet, fetchImpl = fetch) {
-  let cdnOk = true;
-  if (cfg.cdnfly) {
-    const r = await syncCdnfly(cfg.cdnfly, refSet, fetchImpl);
-    if (!r.ok) cdnOk = false;
-  } else {
-    console.log('[INFO] cdnfly sync disabled (no CDNFLY_BASE_URL)');
-  }
-  if (cfg.goedge) {
-    const r = await syncGoedge(cfg.goedge, refSet, fetchImpl);
-    if (!r.ok) cdnOk = false;
-  } else {
-    console.log('[INFO] goedge sync disabled (no GOEDGE_BASE_URL)');
-  }
-  return cdnOk;
+  // The Cloudflare side keeps unparseable or out-of-range items raw so the diff
+  // leaves them alone. They must not spread to the WAFs.
+  const mirrorSet = new Set([...refSet].filter((e) => parseEntry(e) !== null && !isPrivateOrLocal(e)));
+  const skipped = refSet.size - mirrorSet.size;
+  if (skipped > 0) console.warn(`[WARN] ${skipped} Cloudflare items are not valid blocklist entries; not mirrored to the CDNs`);
+  if (!cfg.cdnfly) console.log('[INFO] cdnfly sync disabled (no CDNFLY_BASE_URL)');
+  if (!cfg.goedge) console.log('[INFO] goedge sync disabled (no GOEDGE_BASE_URL)');
+  // The panels are independent, so one slow panel does not delay the other.
+  const results = await Promise.all([
+    cfg.cdnfly && syncCdnfly(cfg.cdnfly, mirrorSet, fetchImpl),
+    cfg.goedge && syncGoedge(cfg.goedge, mirrorSet, fetchImpl),
+  ]);
+  return results.every((r) => !r || r.ok);
 }
 
 /**
@@ -81,6 +81,11 @@ export async function syncCdnMirrors(cfg, refSet, fetchImpl = fetch) {
 export async function main(cfg = loadConfig(), fetchImpl = fetch) {
   const results = await Promise.all(cfg.feedUrls.map((url) => fetchFeed(url, fetchImpl)));
   const merged = mergeFeeds(...results);
+  const localEntries = [...merged].filter(isPrivateOrLocal);
+  if (localEntries.length > 0) {
+    for (const e of localEntries) merged.delete(e);
+    console.warn(`[WARN] dropped ${localEntries.length} private/local feed entries (never blocklist material)`);
+  }
   if (merged.size === 0) {
     console.error('[ABORT] no valid entries fetched; all lists left untouched');
     return 1;

@@ -171,17 +171,37 @@ async function goedgeFetch(cfg, session, path, fetchImpl = fetch) {
  * @param {GoedgeSession} session
  * @param {string} listId
  * @param {typeof fetch} fetchImpl
+ * @param {number} [nowMs] - clock injection for deterministic tests
  * @returns {Promise<Set<string> | null>}
  */
-export async function goedgeExportList(cfg, session, listId, fetchImpl = fetch) {
+export async function goedgeExportList(cfg, session, listId, fetchImpl = fetch, nowMs = Date.now()) {
   const res = await goedgeFetch(cfg, session, `/servers/iplists/exportData?listId=${listId}&format=txt`, fetchImpl);
   if (res === null) return null;
-  const text = await res.text();
+  let text;
+  try {
+    text = await res.text();
+  } catch (e) {
+    console.error(`[ERROR] goedge export of list ${listId}: ${timedOut(e) ? 'timeout' : e.message}`);
+    return null;
+  }
+  // An expired session can answer 200 with a login page or a JSON error. Reading
+  // that as an empty list would re-import everything.
+  if (/^\s*[<{]/.test(text)) {
+    console.error(`[ERROR] goedge export of list ${listId}: response is not a list export`);
+    return null;
+  }
   const set = new Set();
+  const nowSec = Math.floor(nowMs / 1000);
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const value = line.split(',')[0].trim();
-    const norm = normalizeCfItem(value);
+    const parts = line.split(',');
+    // Entries carry an expiry (unix seconds, 0 = never). An expired entry is
+    // dead weight: count it as absent so the sync re-adds it with a fresh
+    // expiry instead of trusting a dead entry as coverage. Harmless if the
+    // panel already filters expired entries out of the export.
+    const expiredAt = Number(parts[1]);
+    if (Number.isFinite(expiredAt) && expiredAt > 0 && expiredAt < nowSec) continue;
+    const norm = normalizeCfItem(parts[0].trim());
     if (norm !== null) set.add(norm);
   }
   return set;
@@ -265,9 +285,10 @@ function isV6(entry) {
  * @param {string[]} toAdd
  * @param {number} expiredAt - unix seconds stamped onto every entry
  * @param {typeof fetch} fetchImpl
+ * @param {number} nowMs - clock injection; expired re-exports skip dead entries
  * @returns {Promise<number>} number of entries confirmed added
  */
-async function importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl = fetch) {
+async function importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl = fetch, nowMs = Date.now()) {
   let pending = [...toAdd];
   let added = 0;
   while (pending.length > 0) {
@@ -278,7 +299,7 @@ async function importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl 
       pending = pending.slice(batch.length);
       continue;
     }
-    const existing = await goedgeExportList(cfg, session, listId, fetchImpl);
+    const existing = await goedgeExportList(cfg, session, listId, fetchImpl, nowMs);
     if (existing === null) break;
     const remaining = pending.filter((e) => !existing.has(e));
     if (remaining.length < pending.length) {
@@ -322,7 +343,7 @@ export async function syncGoedge(cfg, cfSet, fetchImpl = fetch, nowMs = Date.now
 
   for (const [listId, family] of targets) {
     const wanted = [...cfSet].filter(family);
-    const cur = await goedgeExportList(cfg, session, listId, fetchImpl);
+    const cur = await goedgeExportList(cfg, session, listId, fetchImpl, nowMs);
     if (cur === null) {
       ok = false;
       continue;
@@ -331,7 +352,7 @@ export async function syncGoedge(cfg, cfSet, fetchImpl = fetch, nowMs = Date.now
     const toAdd = computeToAdd(wanted, cur);
     console.log(`[INFO] goedge list ${listId}: existing=${cur.size} missing=${toAdd.length} (wanted: ${wanted.length})`);
     if (toAdd.length > 0) {
-      const n = await importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl);
+      const n = await importIntoList(cfg, session, listId, toAdd, expiredAt, fetchImpl, nowMs);
       added += n;
       if (n < toAdd.length) ok = false;
     }

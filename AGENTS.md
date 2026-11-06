@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 Node.js >= 20 ESM batch CLI (`type: module`, no build step — plain JS + JSDoc types, `tsc --noEmit` only).
-Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that reference set add-only into a cdnfly-class WAF panel and GoEdge/EdgeAdmin IP lists; pm2 runs it daily 12:00 Asia/Kuala_Lumpur.
+Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that reference set add-only into a cdnfly-class WAF panel and GoEdge/EdgeAdmin IP lists; a systemd timer (cf-blocklist-sync.timer) runs it daily 12:00 Asia/Kuala_Lumpur.
 
 ## STRUCTURE
 ```
@@ -23,7 +23,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 ├── test_sync_blocklist.js # node:test; injected fetchImpl stubs
 ├── test_cdn_cdnfly.js     # node:test; injected fetchImpl stubs
 ├── test_cdn_goedge.js     # node:test; injected fetchImpl + clock (nowMs) stubs
-├── ecosystem.config.cjs   # pm2 one-shot app def (cron_restart, stop_exit_codes)
+├── ecosystem.config.cjs   # ALTERNATIVE pm2 app def; production schedules via a systemd timer
 ├── tsconfig.json          # strict checkJs config driving `npm run typecheck`
 ├── package.json           # scripts (sync/test/typecheck) + ipaddr.js dep
 ├── .env.example           # tracked config template; real .env is gitignored
@@ -34,13 +34,13 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | Task | Location | Notes |
 |---|---|---|
 | Change what a run does | `src/main.js` → `main()` | Orchestrates CF then CDNs; exit code from here |
-| Add/fix a feed parser rule | `src/ip.js` → `parseEntry` | ipaddr.js; rejects leading-zero octets |
+| Add/fix a feed parser rule | `src/ip.js` → `parseEntry` | ipaddr.js; strict four-part IPv4, Cloudflare prefix limits (/8-/32, /12-/128), canonical CIDR |
 | Change the add-only diff | `src/diff.js` → `computeToAdd` | Shared by the Cloudflare sync and both CDN mirrors |
-| Change Cloudflare IO | `src/cloudflare.js` | `fetchCfItems` (cursor pages), `addItemsToCf` (bare-array POST) |
+| Change Cloudflare IO | `src/cloudflare.js` | `fetchCfItems` (cursor pages), `addItemsToCf` (bare-array POST, waits for each bulk operation) |
 | Change cdnfly behavior | `src/cdn_cdnfly.js` | Value is a JSON string with `custom_black` field |
 | Change GoEdge behavior | `src/cdn_goedge.js` | Session + CSRF; see file header for live-verified API notes |
 | Config keys / enable a CDN | `src/config.js` → `loadConfig`, `.env.example` | CDN enabled only when its `*_BASE_URL` is set |
-| Scheduling / retry | `ecosystem.config.cjs` | `cron_restart`, `stop_exit_codes: [0]`, `restart_delay` |
+| Scheduling / retry | systemd units on the host (`/etc/systemd/system/cf-blocklist-sync.{service,timer}`) | oneshot; `Restart=on-failure`, `RestartSec=5min`, 3 tries/hour; timer fires 12:00 Asia/Kuala_Lumpur |
 
 ## CODE MAP
 | Symbol | Type | Location | Role |
@@ -51,13 +51,13 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 | `loadConfig` | fn | src/config.js | Parse `.env`, OS env overrides; throws on missing required keys |
 | `ENV_FILE` | const | src/config.js | Default `.env` path — project root, i.e. `../.env` from `src/` |
 | `parseEntry` | fn | src/ip.js | One feed line → canonical IP/CIDR or null |
-| `hasLeadingZeroOctets` | fn (internal) | src/ip.js | Rejects dotted-quad IPv4 with leading-zero octets (decimal/octal ambiguity) |
+| `parseStrictAddr` | fn (internal) | src/ip.js | Rejects IPv4 shorthand (`404`, hex, octal, leading zeros) and IPv6 zone IDs |
 | `normalizeCfItem` | fn | src/ip.js | Normalize a stored item for diffing (unparsable kept raw) |
 | `mergeFeeds` | fn | src/feed.js | Union of feed entry sets |
 | `computeToAdd` | fn | src/diff.js | Add-only diff (reference minus existing), sorted |
 | `fetchFeed` | async fn | src/feed.js | Fetch + parse one feed; errors → empty set |
 | `fetchCfItems` | async fn | src/cloudflare.js | Paginate CF list; returns set or null (abort on null) |
-| `addItemsToCf` | async fn | src/cloudflare.js | Batch POST missing items; true only if all batches ok |
+| `addItemsToCf` | async fn | src/cloudflare.js | Batch POST missing items; true only if every bulk operation completed |
 | `fetchCdnflyWafConfig` | async fn | src/cdn_cdnfly.js | Read + JSON-decode the openresty config value |
 | `putCdnflyWafConfig` | async fn | src/cdn_cdnfly.js | Full-value PUT back |
 | `cdnflyBlackSet` | fn | src/cdn_cdnfly.js | Normalized set of `custom_black` lines |
@@ -83,7 +83,7 @@ Syncs IPv4/IPv6 blocklist feeds into a Cloudflare List, then mirrors that refere
 - Every IO entry point catches its own errors (including thrown timeouts) and degrades to a sentinel; `src/cdn_goedge.js` returns `{ok:false}` from `syncGoedge` rather than letting a timeout escape to `run_sync.js` as `[FATAL]`.
 
 ## ANTI-PATTERNS (THIS PROJECT)
-- Do NOT add a top-level auto-run guard to `src/main.js`. pm2 loads the entry point via `import()` (`ProcessContainerFork`), which breaks `argv[1]`-style entry guards; `run_sync.js` is the entry point.
+- Do NOT add a top-level auto-run guard to `src/main.js`; `run_sync.js` is the entry point (importing `main.js` from tests must stay side-effect free).
 - Do NOT hardcode the GoEdge session cookie name — it is build-specific; capture it from `Set-Cookie`.
 - Do NOT rely on bare `node --test`: it discovers ZERO tests here (verified `pass 0`) because files are named `test_*.js`; use `npm test`, whose script globs `test_*.js`.
 - Never commit `.env` (only `.env.example` is tracked).
@@ -95,14 +95,14 @@ npm install                 # deps (ipaddr.js)
 npm run sync                # or: node run_sync.js — one-shot sync; writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync
 npm test                    # node --test "test_*.js"
 npm run typecheck           # tsc --noEmit (strict checkJs over *.js/*.cjs)
-pm2 start ecosystem.config.cjs && pm2 save   # enable the daily cron
+systemctl enable --now cf-blocklist-sync.timer  # enable the daily run (units live in /etc/systemd/system on the host)
 ```
 Exit-code contract: `0` = success (including "nothing to add"); `1` = at least one failure.
 
 ## NOTES
 - CODE MAP omits line numbers deliberately — they rot on every edit; grep the symbol name instead.
 - `tsconfig.json` checks root `*.js`/`*.cjs` plus `src/**/*.js`, and deliberately excludes `test_*.js`. A new source directory must be added to `include` or it is silently not typechecked.
-- pm2 app is one-shot: `stop_exit_codes: [0]` stops on clean exit, `restart_delay: 3000` retries failures; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`).
+- Production runs via a systemd oneshot service: `Restart=on-failure`, `RestartSec=5min`, 3 tries within 1 hour, then it waits for the next timer tick; logs to `/var/log/cf_sync.log` (stderr `/var/log/cf_sync.err`). `ecosystem.config.cjs` is a pm2 alternative, unused on this host.
 - The cdnfly and GoEdge mirrors are enabled only when `CDNFLY_BASE_URL` / `GOEDGE_BASE_URL` is set; otherwise the step is skipped with an `[INFO]` log.
 - Cloudflare list capacity is 10,000 (`MAX_ITEMS`); exceeding it only logs a `[WARN]` and continues.
 - `.env` is read from the project root; OS environment variables override file values. `src/config.js` derives that path from its own location (`../.env`), so moving it without adjusting `ENV_FILE` aims config at `src/.env` — production fails while the other `loadConfig` tests (which all pass explicit paths) stay green. Only the `ENV_FILE` test guards it.
@@ -122,5 +122,5 @@ Checks for this repo: the `npm test` and `npm run typecheck` entries in the COMM
 
 Hard invariants:
 
-- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. It is pm2-managed on the production host, not locally.
+- `npm run sync` writes the production Cloudflare blocklist, so run it only during a deliberate, intended sync. On the production host a systemd timer runs this same checkout — the checkout IS the deployed code.
 - `test_cdn_cdnfly.js` and `test_cdn_goedge.js` are unit tests: they use injected `fetchImpl` stubs and fake hosts (`http://cdn.example`, `http://edge.example`), run as part of `npm test`, and are safe to run locally.

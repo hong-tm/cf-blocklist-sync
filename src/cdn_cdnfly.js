@@ -116,7 +116,7 @@ export function cdnflyBlackSet(customBlack) {
 export function appendToCdnflyBlack(value, toAdd) {
   if (toAdd.length === 0) return 0;
   const trimmed = value.custom_black.replace(/\s+$/, '');
-  value.custom_black = `${trimmed}\n${toAdd.join('\n')}`;
+  value.custom_black = [...(trimmed ? [trimmed] : []), ...toAdd].join('\n');
   return toAdd.length;
 }
 
