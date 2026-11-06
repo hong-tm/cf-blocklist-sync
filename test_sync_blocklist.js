@@ -612,6 +612,11 @@ test('isPrivateOrLocal: private/local ranges true, public and documentation fals
   assert.equal(isPrivateOrLocal('fe80::1'), true);
   for (const e of ['8.8.8.8', '1.2.3.0/24', '2001:db8::1', '2001:db8::/64']) assert.equal(isPrivateOrLocal(e), false, e);
   assert.equal(isPrivateOrLocal('garbage-line'), false); // raw values are not the filter's business
+  // Spanning CIDRs: overlap with a blocked range, not just the first address.
+  assert.equal(isPrivateOrLocal('172.0.0.0/8'), true); // contains 172.16.0.0/12
+  assert.equal(isPrivateOrLocal('100.0.0.0/8'), true); // contains 100.64.0.0/10
+  assert.equal(isPrivateOrLocal('23.0.0.0/8'), false);
+  assert.equal(isPrivateOrLocal('2001:db8:abcd::/48'), false);
 });
 
 test('main: private feed entries are dropped, never posted to Cloudflare', async () => {
@@ -645,4 +650,18 @@ test('syncCdnMirrors: private entries in the Cloudflare list are not mirrored', 
   const { logs } = await quiet(() => syncCdnMirrors(cfg, new Set(['9.9.9.9', '10.0.0.0/8', '127.0.0.1']), fetchImpl));
   assert.equal(putValue.custom_black, '9.9.9.9');
   assert.ok(logs.some((l) => l.startsWith('[WARN] 2 Cloudflare items')));
+});
+
+test('addItemsToCf: a success reply without an operation_id fails the batch', async () => {
+  const items = Array.from({ length: 501 }, (_, i) => `23.0.${Math.floor(i / 256)}.${(i % 256) + 1}`); // spans two batches
+  const order = [];
+  const fetchImpl = async (url, opts = {}) => {
+    order.push(url.includes('/bulk_operations/') ? 'poll' : 'post');
+    if (url.includes('/bulk_operations/')) return OP_COMPLETED();
+    return fakeResponse({ success: true, result: {} }); // no operation_id
+  };
+  const { code, logs } = await quiet(() => addItemsToCf(CFG, items, fetchImpl, async () => {}));
+  assert.equal(code, false);
+  assert.deepEqual(order, ['post']); // nothing after the unconfirmable write: no poll, no second batch
+  assert.ok(logs.some((l) => l.includes('without an operation_id')));
 });

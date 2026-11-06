@@ -149,7 +149,11 @@ export async function addItemsToCf(cfg, items, fetchImpl = fetch, sleep = delay)
       const data = /** @type {CfWriteResponse | null} */ (await res.json().catch(() => null));
       if (res.ok && data && data.success === true) {
         const operationId = data.result?.operation_id;
-        if (operationId && !(await waitForOperation(cfg, operationId, fetchImpl, sleep))) return false;
+        if (!operationId) {
+          console.error(`[ERROR] Cloudflare add batch ${Math.floor(i / CF_BATCH_SIZE) + 1}: success reply without an operation_id; cannot confirm the write`);
+          return false;
+        }
+        if (!(await waitForOperation(cfg, operationId, fetchImpl, sleep))) return false;
         done += batch.length;
       } else {
         console.error(`[ERROR] Cloudflare add batch ${Math.floor(i / CF_BATCH_SIZE) + 1} HTTP ${res.status}: ${JSON.stringify(data && data.errors ? data.errors : data)}`);
