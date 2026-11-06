@@ -653,14 +653,15 @@ test('syncCdnMirrors: private entries in the Cloudflare list are not mirrored', 
 });
 
 test('addItemsToCf: a success reply without an operation_id fails the batch', async () => {
-  const calls = [];
+  const items = Array.from({ length: 501 }, (_, i) => `23.0.${Math.floor(i / 256)}.${(i % 256) + 1}`); // spans two batches
+  const order = [];
   const fetchImpl = async (url, opts = {}) => {
+    order.push(url.includes('/bulk_operations/') ? 'poll' : 'post');
     if (url.includes('/bulk_operations/')) return OP_COMPLETED();
-    calls.push(opts);
     return fakeResponse({ success: true, result: {} }); // no operation_id
   };
-  const { code, logs } = await quiet(() => addItemsToCf(CFG, ['1.1.1.1', '2.2.2.2'], fetchImpl, async () => {}));
+  const { code, logs } = await quiet(() => addItemsToCf(CFG, items, fetchImpl, async () => {}));
   assert.equal(code, false);
-  assert.equal(calls.length, 1); // no retry of the same or later batches
+  assert.deepEqual(order, ['post']); // nothing after the unconfirmable write: no poll, no second batch
   assert.ok(logs.some((l) => l.includes('without an operation_id')));
 });
