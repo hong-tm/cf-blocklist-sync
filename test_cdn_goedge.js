@@ -90,7 +90,7 @@ test('goedgeLogin: failed login -> null', async () => {
 test('goedgeExportList: parses the txt export into normalized entries', async () => {
   const body = '116.129.250.44,1820582109,ipv4,critical,\n240e:361:aa00:3300::/64,1820052307,ipv6,critical,\n';
   const fetchImpl = async () => ({ ok: true, status: 200, text: async () => body });
-  const s = await goedgeExportList(CFG, { cookie: 'c' }, 4, fetchImpl);
+  const s = await goedgeExportList(CFG, { cookie: 'c' }, 4, fetchImpl, 1_700_000_000_000); // fixed clock: fixture expiries stay in the future forever
   assert.deepEqual(s, new Set(['116.129.250.44', '240e:361:aa00:3300::/64']));
 });
 

@@ -88,7 +88,8 @@ export async function fetchCfItems(cfg, fetchImpl = fetch) {
 
 /**
  * Wait until one bulk operation finishes. The first status read has no delay.
- * Network errors propagate to the caller's handler.
+ * HTTP/JSON failures return false; a thrown network error is caught by
+ * addItemsToCf's handler.
  * @param {Config} cfg
  * @param {string} operationId
  * @param {typeof fetch} fetchImpl

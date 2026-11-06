@@ -343,7 +343,7 @@ export async function syncGoedge(cfg, cfSet, fetchImpl = fetch, nowMs = Date.now
 
   for (const [listId, family] of targets) {
     const wanted = [...cfSet].filter(family);
-    const cur = await goedgeExportList(cfg, session, listId, fetchImpl);
+    const cur = await goedgeExportList(cfg, session, listId, fetchImpl, nowMs);
     if (cur === null) {
       ok = false;
       continue;

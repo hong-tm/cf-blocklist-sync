@@ -47,9 +47,18 @@ export function parseEntry(raw) {
   if (slashParts.length === 1) {
     return mapped ? addr.toIPv4Address().toString() : addr.toString();
   }
-  if (mapped) return null;
   try {
     const [, prefix] = ipaddr.parseCIDR(token); // throws on malformed
+    if (mapped) {
+      // An IPv4-mapped CIDR is an IPv4 range in disguise: ::ffff:1.2.3.0/120 == 1.2.3.0/24.
+      if (prefix < 96) return null; // spans non-mapped space
+      const v4 = addr.toIPv4Address();
+      const v4prefix = prefix - 96;
+      if (v4prefix === 32) return v4.toString();
+      if (v4prefix < PREFIX_LIMITS.ipv4.min) return null;
+      const net = ipaddr.IPv4.networkAddressFromCIDR(v4.toString() + '/' + v4prefix);
+      return net.toString() + '/' + v4prefix;
+    }
     const limits = PREFIX_LIMITS[addr.kind()];
     if (prefix < limits.min || prefix > limits.host) return null;
     if (prefix === limits.host) return addr.toString();

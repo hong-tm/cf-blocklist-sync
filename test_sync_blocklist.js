@@ -504,7 +504,9 @@ test('parseEntry: notation variants collapse to one canonical form', () => {
   assert.equal(parseEntry('1.2.3.4/32'), '1.2.3.4');
   assert.equal(parseEntry('2001:db8::1/128'), '2001:db8::1');
   assert.equal(parseEntry('::ffff:1.2.3.4'), '1.2.3.4');
-  assert.equal(parseEntry('::ffff:1.2.3.4/120'), null);
+  assert.equal(parseEntry('::ffff:1.2.3.4/120'), '1.2.3.0/24'); // mapped CIDR == the IPv4 range
+  assert.equal(parseEntry('::ffff:1.2.3.4/128'), '1.2.3.4');
+  assert.equal(parseEntry('::ffff:0:0/95'), null); // spans non-mapped space
 });
 
 test('loadConfig: strips only a matched pair of quotes', () => {
@@ -584,7 +586,7 @@ test('syncCdnMirrors: raw or out-of-range Cloudflare items never reach a WAF', a
   assert.ok(logs.some((l) => l.startsWith('[WARN] 2 Cloudflare items')));
 });
 
-test('syncCdnMirrors: a slow panel does not hold up the other, and both results count', async () => {
+test('syncCdnMirrors: a slow panel does not hold up the other, and both results count', { timeout: 5000 }, async () => { // fails fast on a sequencing regression instead of hanging
   let releaseCdnfly;
   const cdnflyBlocked = new Promise((resolve) => { releaseCdnfly = resolve; });
   const fetchImpl = async (url) => {
