@@ -82,17 +82,56 @@ export function normalizeCfItem(raw) {
   return parseEntry(stripped) ?? stripped;
 }
 
+// Blocked ranges by family, as [first, last] BigInt pairs. A CIDR is blocked
+// when it OVERLAPS any of them — 172.0.0.0/8 contains 172.16.0.0/12 — so a
+// spanning range cannot smuggle internal space onto the WAFs.
+const BLOCKED_CIDRS = {
+  ipv4: ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '224.0.0.0/4'],
+  ipv6: ['::/128', '::1/128', 'fe80::/10', 'fc00::/7', 'ff00::/8'],
+};
+
 /**
- * True for a canonical IP or CIDR whose network address is private, local or
- * otherwise non-routable. Documentation ranges (2001:db8::/32, 240.0.0.0/4)
- * are left alone: they never reach a real origin, and rejecting them would
- * churn every test fixture.
+ * @param {import('ipaddr.js').IPv4 | import('ipaddr.js').IPv6} addr
+ * @returns {bigint}
+ */
+function addrToBigInt(addr) {
+  let n = 0n;
+  for (const b of addr.toByteArray()) n = (n << 8n) | BigInt(b);
+  return n;
+}
+
+/**
+ * [first, last] addresses covered by a canonical CIDR.
+ * @param {string} cidr
+ * @returns {[bigint, bigint]}
+ */
+function cidrRange(cidr) {
+  const [addr, prefix] = ipaddr.parseCIDR(cidr);
+  const bits = addr.kind() === 'ipv4' ? 32 : 128;
+  const hostBits = BigInt(bits - prefix);
+  const first = (addrToBigInt(addr) >> hostBits) << hostBits;
+  return [first, first | ((1n << hostBits) - 1n)];
+}
+
+const BLOCKED_RANGES = {
+  ipv4: BLOCKED_CIDRS.ipv4.map(cidrRange),
+  ipv6: BLOCKED_CIDRS.ipv6.map(cidrRange),
+};
+
+/**
+ * True for a canonical IP or CIDR that is private or local, or overlaps one.
+ * Bare addresses are judged by their range; CIDRs by overlap (a public /8
+ * containing 172.16.0.0/12 is blocked). Documentation ranges (2001:db8::/32,
+ * 240.0.0.0/4) are left alone: they never reach a real origin, and rejecting
+ * them would churn every test fixture.
  * @param {string} entry
  * @returns {boolean}
  */
 export function isPrivateOrLocal(entry) {
   const parsed = parseEntry(entry);
   if (parsed === null) return false;
-  const addr = ipaddr.parse(parsed.split('/')[0]);
-  return NON_PUBLIC_RANGES.has(addr.range());
+  if (!parsed.includes('/')) return NON_PUBLIC_RANGES.has(ipaddr.parse(parsed).range());
+  const kind = ipaddr.parse(parsed.split('/')[0]).kind();
+  const [first, last] = cidrRange(parsed);
+  return BLOCKED_RANGES[kind].some(([bFirst, bLast]) => first <= bLast && bFirst <= last);
 }
