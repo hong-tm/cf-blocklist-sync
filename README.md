@@ -18,7 +18,7 @@ IPv6 feed ─┘                                                          │
 
 - 从两条 IP 黑名单订阅源（IPv4 / IPv6）拉取数据，经解析、去重与校验后增量添加到 Cloudflare List，并把结果同步到 cdnfly 与 GoEdge 两个 CDN 面板。
 - 只增不删、可重复执行：Cloudflare 与两个 CDN 面板均只做增量添加，重复运行是安全的。
-- 通过 systemd 定时器（`cf-blocklist-sync.timer`）每天 12:00 Asia/Kuala_Lumpur 自动运行，日志写入 /var/log/cf_sync.log；运行失败时每 5 分钟重试，1 小时内 3 次失败后停止，等下一次定时触发。
+- 通过 pm2 定时任务（`cron_restart`）每天 12:00 Asia/Kuala_Lumpur 自动运行，日志写入 /var/log/cf_sync.log；运行失败时每 5 分钟重试，最多 3 次后停止，等下一次定时触发。
 - 代码位于 `src/`：`main.js` 编排，`config/feed/cloudflare` 与两个 CDN 客户端各司其职，`ip.js`/`http.js`/`diff.js` 为共享工具。
 - `npm test` 运行全部测试（网络调用均已 mock，不触碰线上端点）。
 
@@ -98,13 +98,13 @@ Exit code `0` means success (including the "nothing to add" case); exit code `1`
 
 ## Deploy
 
-Production schedules the sync with a systemd timer (unit files in `/etc/systemd/system` on the host):
+Production schedules the sync with pm2:
 
 ```bash
-systemctl enable --now cf-blocklist-sync.timer
+pm2 start ecosystem.config.cjs && pm2 save
 ```
 
-The timer fires daily at 12:00 Asia/Kuala_Lumpur and the oneshot service writes logs to `/var/log/cf_sync.log` (stderr to `/var/log/cf_sync.err`). A failed run (exit 1) is retried every 5 minutes, up to 3 times within an hour, then left for the next timer tick. `ecosystem.config.cjs` stays as an alternative for hosts that prefer pm2.
+pm2 restarts the app daily at 12:00 Asia/Kuala_Lumpur (`cron_restart`) and writes logs to `/var/log/cf_sync.log` (stderr to `/var/log/cf_sync.err`). It is a one-shot app: a clean exit(0) stops the process until the next cron tick, while a failed run (exit 1) retries every 5 minutes, at most 3 times (`min_uptime` makes every failing retry count as unstable, so retries are bounded), then waits for the next cron tick. A systemd timer variant (`cf-blocklist-sync.timer`) exists on the host but is disabled — do not enable both, or the sync runs twice a day.
 
 ## Testing
 
